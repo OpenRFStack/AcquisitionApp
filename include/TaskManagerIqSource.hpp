@@ -42,11 +42,10 @@ Contact author for permission: https://github.com/OpenRFStack
  * the dest_ports[] field of the task request, eliminating the race between
  * task acceptance and the first IQ packet arriving.
  */
-#include "IqSource.hpp"
 #include "DwellAssembler.hpp"
+#include "IqSource.hpp"
 #include "SweepConfig.hpp"
-#include <au/units/hertz.hh>
-#include <au/units/seconds.hh>
+
 #include <atomic>
 #include <condition_variable>
 #include <memory>
@@ -54,8 +53,16 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <string>
 #include <thread>
 
-namespace proton { class container; }
-namespace acq {
+#include <au/units/hertz.hh>
+#include <au/units/seconds.hh>
+
+namespace proton
+{
+class container;
+}  // namespace proton
+
+namespace acq
+{
 
 class TaskAmqpChannel;  ///< Persistent AMQP request/response channel (defined in .cpp).
 
@@ -65,19 +72,21 @@ class TaskAmqpChannel;  ///< Persistent AMQP request/response channel (defined i
  * Instantiated once per scanner startup.  The AMQP channel is established
  * in the constructor and reused for the lifetime of the process.
  */
-class TaskManagerIqSource : public IqSource {
+class TaskManagerIqSource : public IqSource
+{
 public:
     /**
      * @brief Construct and connect the persistent AMQP channel.
      * @param cfg              Sweep configuration (AMQP URL, credentials, scan params, etc.).
      * @param preferred_device Device ID hint (empty = any free device).
      * @param device_required  When true, preferred_device is sent as required_device and the
-     *                         controller rejects the task rather than falling back to another device.
+     *                         controller rejects the task rather than falling back to another
+     * device.
      * @throws std::runtime_error if the AMQP channel fails to connect within 60 s.
      */
     explicit TaskManagerIqSource(const SweepConfig& cfg,
-                                  std::string preferred_device = "",
-                                  bool device_required = false);
+                                 std::string        preferred_device = "",
+                                 bool               device_required  = false);
     ~TaskManagerIqSource() override;
 
     /**
@@ -95,13 +104,13 @@ public:
      * @brief Submit a SCAN task and bind the UDP socket.
      * @throws std::runtime_error if the task is rejected or the socket bind fails.
      */
-    void open()  override;
+    void open() override;
 
     /// @brief Send TASK_STOP and close the UDP socket.
     void close() override;
 
     /// @brief Signal the next() loop to return false.  Thread-safe.
-    void stop()  override;
+    void stop() override;
 
     /**
      * @brief Block until a complete Dwell is available.
@@ -111,7 +120,10 @@ public:
     bool next(Dwell& d) override;
 
     /// @brief Number of RX channels requested from the controller.
-    int  numChannels() const override { return cfg_.device.rx_channels; }
+    int numChannels() const override
+    {
+        return cfg_.device.rx_channels;
+    }
 
     /**
      * @brief Retarget the next SCAN task to [start_hz, stop_hz].
@@ -123,15 +135,15 @@ public:
     void setSweepBand(au::QuantityD<au::Hertz> start_hz, au::QuantityD<au::Hertz> stop_hz);
 
 private:
-    SweepConfig       cfg_;
-    std::string       preferred_device_;        ///< Requested device ID; empty = any free device.
-    bool              device_required_{false};  ///< When true, send as required_device (hard constraint).
-    int               udp_fd_{-1};              ///< UDP receive socket file descriptor.
-    std::string       task_id_;                 ///< Controller-assigned task UUID for TASK_STOP.
-    std::atomic<bool> running_{false};          ///< Set false by stop() to break the next() loop.
+    SweepConfig cfg_;
+    std::string preferred_device_;        ///< Requested device ID; empty = any free device.
+    bool        device_required_{false};  ///< When true, send as required_device (hard constraint).
+    int         udp_fd_{-1};              ///< UDP receive socket file descriptor.
+    std::string task_id_;                 ///< Controller-assigned task UUID for TASK_STOP.
+    std::atomic<bool> running_{false};    ///< Set false by stop() to break the next() loop.
 
     /// Packet → dwell assembly (gap/overflow aware); see DwellAssembler.hpp.
-    DwellAssembler    assembler_;
+    DwellAssembler assembler_;
 
     /// True until the first packet of the current TASK (not dwell) arrives.
     /// Must be a member, not a local in next(): next() returns once per
@@ -157,23 +169,23 @@ private:
     /// The last entry's dwell has been delivered — next() returns false at once.
     bool sweep_done_{false};
 
-    std::vector<uint8_t> pkt_buf_;             ///< Pre-allocated 64 KB UDP receive buffer.
+    std::vector<uint8_t> pkt_buf_;  ///< Pre-allocated 64 KB UDP receive buffer.
 
     /// @brief Bind a UDP socket to @p port (0 = OS-assigned).
-    void        bindUdp(uint16_t port);
+    void bindUdp(uint16_t port);
 
     /// @brief Submit TASK_REQUEST_SCAN to SdrRM and return the allocated UDP port.
     /// @throws std::runtime_error on rejection or timeout.
-    uint16_t    submitTask();
+    uint16_t submitTask();
 
     /// @brief Send TASK_STOP for the current task_id_ (fire-and-forget).
-    void        sendTaskStop();
+    void sendTaskStop();
 
     /// @brief Build the SCAN task JSON body with dwell entries from resume_hz_.
     std::string buildScanRequest(const std::string& req_id) const;
 
     /// @brief Reset per-channel accumulators and current_center_hz_ to zero.
-    void        resetAccum();
+    void resetAccum();
 
     /// Persistent AMQP channel — connects once at startup, reused for all
     /// task submissions and health queries. Avoids the ~30 s Artemis setup
@@ -182,10 +194,10 @@ private:
 
     /// UDP port pre-bound before submitTask() so IQ packets arrive at a ready
     /// socket from the first frame — eliminates the TASK_ACCEPTED race window.
-    uint16_t    prebound_port_{0};
+    uint16_t prebound_port_{0};
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

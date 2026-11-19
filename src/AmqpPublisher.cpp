@@ -11,36 +11,61 @@ Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
 #include "AmqpPublisher.hpp"
-#include <au/units/hertz.hh>
-#include <sdr/Base64.hpp>
+
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
 #include <proton/reconnect_options.hpp>
+#include <sdr/Base64.hpp>
+#include <spdlog/spdlog.h>
+
 #include <chrono>
 
-namespace acq {
+#include <au/units/hertz.hh>
+
+namespace acq
+{
 
 using json = nlohmann::json;
 using namespace std::chrono;
 
-AmqpPublisher::AmqpPublisher(std::string url, std::string username, std::string password,
-                             std::string topic, std::string scanner_id)
-    : url_(std::move(url)), username_(std::move(username)), password_(std::move(password)),
-      topic_(std::move(topic)), scanner_id_(std::move(scanner_id))
-{}
-
-AmqpPublisher::~AmqpPublisher() { stop(); }
-
-void AmqpPublisher::start() {
-    container_ = new proton::container(*this);
-    thread_ = std::thread([this]{ container_->run(); });
+AmqpPublisher::AmqpPublisher(std::string url,
+                             std::string username,
+                             std::string password,
+                             std::string topic,
+                             std::string scanner_id)
+    : url_(std::move(url))
+    , username_(std::move(username))
+    , password_(std::move(password))
+    , topic_(std::move(topic))
+    , scanner_id_(std::move(scanner_id))
+{
 }
 
-void AmqpPublisher::stop() {
+AmqpPublisher::~AmqpPublisher()
+{
+    stop();
+}
+
+void AmqpPublisher::start()
+{
+    container_ = new proton::container(*this);
+    thread_    = std::thread(
+        [this]
+        {
+            container_->run();
+        });
+}
+
+void AmqpPublisher::stop()
+{
     stopping_ = true;
-    if (container_) {
+    if (container_)
+    {
         if (auto* wq = work_queue_.load())
-            wq->add([this]{ sender_.connection().close(); });
+            wq->add(
+                [this]
+                {
+                    sender_.connection().close();
+                });
         else
             // Connection never reached on_sender_open, so there's no work
             // queue to post a close through. reconnect_options above sets
@@ -48,29 +73,39 @@ void AmqpPublisher::stop() {
             // container_->run() never returns and thread_.join() blocks
             // forever.
             container_->stop();
-        if (thread_.joinable()) thread_.join();
+        if (thread_.joinable())
+            thread_.join();
         work_queue_.store(nullptr);
         delete container_;
         container_ = nullptr;
     }
 }
 
-void AmqpPublisher::publish(const Detection& d) {
+void AmqpPublisher::publish(const Detection& d)
+{
     auto* wq = work_queue_.load();
-    if (!wq || stopping_) return;
+    if (!wq || stopping_)
+        return;
     proton::message msg = makeMessage(d);
-    wq->add([this, msg]() mutable {
-        if (sender_) sender_.send(msg);
-    });
+    wq->add(
+        [this, msg]() mutable
+        {
+            if (sender_)
+                sender_.send(msg);
+        });
 }
 
-void AmqpPublisher::on_container_start(proton::container& c) {
+void AmqpPublisher::on_container_start(proton::container& c)
+{
     proton::connection_options opts;
-    if (!username_.empty()) {
+    if (!username_.empty())
+    {
         opts.sasl_allowed_mechs("PLAIN");
         opts.sasl_allow_insecure_mechs(true);
         opts.user(username_).password(password_);
-    } else {
+    }
+    else
+    {
         opts.sasl_allowed_mechs("ANONYMOUS");
     }
     // Without this, a failed initial connection (e.g. broker not up yet) is
@@ -78,53 +113,55 @@ void AmqpPublisher::on_container_start(proton::container& c) {
     // recovers. Retry indefinitely with backoff, matching TaskAmqpChannel.
     proton::reconnect_options ropts;
     ropts.delay(proton::duration(2000));
-    ropts.max_delay(proton::duration(30000));
+    ropts.max_delay(proton::duration(30'000));
     ropts.max_attempts(0);
     opts.reconnect(ropts);
     c.connect(url_, opts);
 }
 
-void AmqpPublisher::on_connection_open(proton::connection& conn) {
+void AmqpPublisher::on_connection_open(proton::connection& conn)
+{
     conn.open_sender(topic_);
 }
 
-void AmqpPublisher::on_sender_open(proton::sender& s) {
+void AmqpPublisher::on_sender_open(proton::sender& s)
+{
     sender_ = s;
     work_queue_.store(&s.work_queue());
     spdlog::info("[AmqpPublisher] connected → {}", topic_);
 }
 
-void AmqpPublisher::on_transport_error(proton::transport& t) {
+void AmqpPublisher::on_transport_error(proton::transport& t)
+{
     spdlog::warn("[AmqpPublisher] transport error: {}", t.error().what());
 }
 
-void AmqpPublisher::on_connection_error(proton::connection& c) {
+void AmqpPublisher::on_connection_error(proton::connection& c)
+{
     spdlog::warn("[AmqpPublisher] connection error: {}", c.error().what());
 }
 
-proton::message AmqpPublisher::makeMessage(const Detection& d) const {
-    auto ms = duration_cast<milliseconds>(
-        d.timestamp.time_since_epoch()).count();
+proton::message AmqpPublisher::makeMessage(const Detection& d) const
+{
+    auto ms = duration_cast<milliseconds>(d.timestamp.time_since_epoch()).count();
 
-    json body = {
-        {"msg_type",        "RF_DETECTION"},
-        {"schema_version",  SCHEMA_VERSION},
-        {"timestamp_ms",    ms},
-        {"scanner_id",      d.scanner_id},
-        {"center_freq_hz",  d.center_freq_hz.in(au::hertz)},
-        {"bandwidth_hz",    d.bandwidth_hz.in(au::hertz)},
-        {"power_db",        d.power_db},
-        {"snr_db",          d.snr_db},
-        {"channel",         d.channel}
-    };
+    json body = {{"msg_type", "RF_DETECTION"},
+                 {"schema_version", SCHEMA_VERSION},
+                 {"timestamp_ms", ms},
+                 {"scanner_id", d.scanner_id},
+                 {"center_freq_hz", d.center_freq_hz.in(au::hertz)},
+                 {"bandwidth_hz", d.bandwidth_hz.in(au::hertz)},
+                 {"power_db", d.power_db},
+                 {"snr_db", d.snr_db},
+                 {"channel", d.channel}};
 
     // IQ snapshot: base64-encoded raw float32 bytes (~11 KB) instead of a
     // JSON float array (~28 KB). Receivers decode with sdr::base64::decodeFloats().
     // Backward-compatible decoders fall back to "iq_snapshot" (JSON array).
-    if (d.iq_snapshot && !d.iq_snapshot->empty()) {
-        body["iq_snapshot_b64"] = sdr::base64::encode(
-            d.iq_snapshot->data(),
-            d.iq_snapshot->size() * sizeof(float));
+    if (d.iq_snapshot && !d.iq_snapshot->empty())
+    {
+        body["iq_snapshot_b64"] =
+            sdr::base64::encode(d.iq_snapshot->data(), d.iq_snapshot->size() * sizeof(float));
         body["snapshot_sample_rate_sps"] = d.snapshot_sample_rate_sps.in(au::hertz);
     }
 
@@ -134,7 +171,7 @@ proton::message AmqpPublisher::makeMessage(const Detection& d) const {
     return msg;
 }
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

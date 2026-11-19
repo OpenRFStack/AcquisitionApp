@@ -11,17 +11,25 @@ Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
 #include "DetectionDb.hpp"
-#include <au/units/hertz.hh>
+
 #include <spdlog/spdlog.h>
+
 #include <chrono>
 
-namespace acq {
+#include <au/units/hertz.hh>
+
+namespace acq
+{
 
 using namespace std::chrono;
 
-DetectionDb::DetectionDb(const std::string& conn_str, int batch_size,
+DetectionDb::DetectionDb(const std::string&         conn_str,
+                         int                        batch_size,
                          au::QuantityD<au::Seconds> flush_interval)
-    : conn_str_(conn_str), conn_(conn_str), batch_size_(batch_size), flush_interval_(flush_interval)
+    : conn_str_(conn_str)
+    , conn_(conn_str)
+    , batch_size_(batch_size)
+    , flush_interval_(flush_interval)
 {
     pqxx::work txn(conn_);
     // Ensure the shared signals table exists (schema/init.sql should be run first,
@@ -70,16 +78,23 @@ DetectionDb::DetectionDb(const std::string& conn_str, int batch_size,
     )");
     txn.commit();
 
-    thread_ = std::thread([this]{ workerLoop(); });
+    thread_ = std::thread(
+        [this]
+        {
+            workerLoop();
+        });
 }
 
-DetectionDb::~DetectionDb() {
+DetectionDb::~DetectionDb()
+{
     stopped_ = true;
     cv_.notify_all();
-    if (thread_.joinable()) thread_.join();
+    if (thread_.joinable())
+        thread_.join();
 }
 
-void DetectionDb::push(const Detection& d) {
+void DetectionDb::push(const Detection& d)
+{
     {
         std::lock_guard lock(mutex_);
         queue_.push(d);
@@ -87,34 +102,50 @@ void DetectionDb::push(const Detection& d) {
     cv_.notify_one();
 }
 
-void DetectionDb::workerLoop() {
+void DetectionDb::workerLoop()
+{
     std::vector<Detection> batch;
     batch.reserve((size_t)batch_size_);
 
-    while (!stopped_) {
+    while (!stopped_)
+    {
         {
             std::unique_lock lock(mutex_);
             cv_.wait_for(lock,
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::duration<double>(flush_interval_.in(au::seconds))),
-                [this]{ return (int)queue_.size() >= batch_size_ || stopped_; });
+                         std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::duration<double>(flush_interval_.in(au::seconds))),
+                         [this]
+                         {
+                             return (int)queue_.size() >= batch_size_ || stopped_;
+                         });
 
-            while (!queue_.empty() && (int)batch.size() < batch_size_) {
+            while (!queue_.empty() && (int)batch.size() < batch_size_)
+            {
                 batch.push_back(queue_.front());
                 queue_.pop();
             }
         }
 
-        if (!batch.empty()) {
-            try { flush(batch); }
-            catch (const pqxx::broken_connection& e) {
+        if (!batch.empty())
+        {
+            try
+            {
+                flush(batch);
+            }
+            catch (const pqxx::broken_connection& e)
+            {
                 spdlog::error("[DetectionDb] connection lost: {} — reconnecting", e.what());
-                try { conn_ = pqxx::connection(conn_str_); }
-                catch (const std::exception& re) {
+                try
+                {
+                    conn_ = pqxx::connection(conn_str_);
+                }
+                catch (const std::exception& re)
+                {
                     spdlog::error("[DetectionDb] reconnect failed: {}", re.what());
                 }
             }
-            catch (const std::exception& e) {
+            catch (const std::exception& e)
+            {
                 spdlog::error("[DetectionDb] flush failed: {}", e.what());
             }
             batch.clear();
@@ -124,31 +155,39 @@ void DetectionDb::workerLoop() {
     // Drain remaining items on shutdown
     {
         std::lock_guard lock(mutex_);
-        while (!queue_.empty()) {
+        while (!queue_.empty())
+        {
             batch.push_back(queue_.front());
             queue_.pop();
         }
     }
-    if (!batch.empty()) {
-        try { flush(batch); }
-        catch (const std::exception& e) {
+    if (!batch.empty())
+    {
+        try
+        {
+            flush(batch);
+        }
+        catch (const std::exception& e)
+        {
             spdlog::error("[DetectionDb] final flush failed: {}", e.what());
         }
     }
 }
 
-void DetectionDb::flush(std::vector<Detection>& batch) {
+void DetectionDb::flush(std::vector<Detection>& batch)
+{
     pqxx::work txn(conn_);
 
-    for (const auto& d : batch) {
-        auto ms = duration_cast<milliseconds>(
-            d.timestamp.time_since_epoch()).count();
+    for (const auto& d : batch)
+    {
+        auto ms = duration_cast<milliseconds>(d.timestamp.time_since_epoch()).count();
 
         const double center_freq_raw = d.center_freq_hz.in(au::hertz);
         const double bandwidth_raw   = d.bandwidth_hz.in(au::hertz);
 
         std::optional<double> bw_opt;
-        if (bandwidth_raw > 0) bw_opt = bandwidth_raw;
+        if (bandwidth_raw > 0)
+            bw_opt = bandwidth_raw;
 
         // Find a recent signal at the same frequency (±10 kHz) with similar
         // bandwidth (±50%).  Matches classified OR unclassified rows — if the
@@ -164,44 +203,45 @@ void DetectionDb::flush(std::vector<Detection>& batch) {
             center_freq_raw,
             bw_opt);
 
-        if (!existing.empty()) {
+        if (!existing.empty())
+        {
             // Same signal seen again — update last_seen, peak power, hit count.
             // Don't touch modulation/classification — AnalysisApp owns those.
-            txn.exec_params(
-                "UPDATE signals SET "
-                "  last_seen    = to_timestamp($2::double precision / 1000.0), "
-                "  power_db     = GREATEST(power_db, $3), "
-                "  hits         = hits + 1 "
-                "WHERE id = $1",
-                existing[0][0].as<long long>(),
-                ms,
-                d.power_db);
-        } else {
+            txn.exec_params("UPDATE signals SET "
+                            "  last_seen    = to_timestamp($2::double precision / 1000.0), "
+                            "  power_db     = GREATEST(power_db, $3), "
+                            "  hits         = hits + 1 "
+                            "WHERE id = $1",
+                            existing[0][0].as<long long>(),
+                            ms,
+                            d.power_db);
+        }
+        else
+        {
             // First time this signal has been seen — insert unclassified row.
             // AnalysisApp will fill in modulation/classification after IQ collection.
             std::optional<double> lat_opt = d.lat;
             std::optional<double> lon_opt = d.lon;
             std::optional<float>  alt_opt = d.alt_m.has_value()
-                                            ? std::optional<float>(static_cast<float>(*d.alt_m))
-                                            : std::nullopt;
-            txn.exec_params(
-                "INSERT INTO signals "
-                "(first_seen, last_seen, freq_hz, freq_mhz, bandwidth_hz, "
-                " power_db, scanner_id, channel, lat, lon, alt_m) "
-                "VALUES ("
-                "  to_timestamp($1::double precision / 1000.0), "
-                "  to_timestamp($1::double precision / 1000.0), "
-                "  $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-                ms,
-                center_freq_raw,
-                center_freq_raw / 1e6,
-                bw_opt,
-                d.power_db,
-                d.scanner_id,
-                d.channel,
-                lat_opt,
-                lon_opt,
-                alt_opt);
+                                                ? std::optional<float>(static_cast<float>(*d.alt_m))
+                                                : std::nullopt;
+            txn.exec_params("INSERT INTO signals "
+                            "(first_seen, last_seen, freq_hz, freq_mhz, bandwidth_hz, "
+                            " power_db, scanner_id, channel, lat, lon, alt_m) "
+                            "VALUES ("
+                            "  to_timestamp($1::double precision / 1000.0), "
+                            "  to_timestamp($1::double precision / 1000.0), "
+                            "  $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                            ms,
+                            center_freq_raw,
+                            center_freq_raw / 1e6,
+                            bw_opt,
+                            d.power_db,
+                            d.scanner_id,
+                            d.channel,
+                            lat_opt,
+                            lon_opt,
+                            alt_opt);
         }
     }
 
@@ -209,7 +249,7 @@ void DetectionDb::flush(std::vector<Detection>& batch) {
     spdlog::debug("[DetectionDb] upserted {} detections", batch.size());
 }
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

@@ -17,36 +17,41 @@ Contact author for permission: https://github.com/OpenRFStack
  * No AMQP broker or PostgreSQL instance required — AlertStore is tested with
  * a mock, GpsMonitor is tested with an injectable IQ callback.
  */
-#include <gtest/gtest.h>
-#include "RfAlert.hpp"
 #include "GpsMonitor.hpp"
+#include "RfAlert.hpp"
+
+#include <gtest/gtest.h>
+
 #include <cmath>
-#include <vector>
 #include <string>
+#include <vector>
 
 using namespace acq;
 
 // ── RfAlert type helpers ──────────────────────────────────────────────────────
 
-TEST(RfAlert, TypeNameRoundTrip) {
-    EXPECT_STREQ(alertTypeName(AlertType::GPS_JAMMING),    "GPS_JAMMING");
-    EXPECT_STREQ(alertTypeName(AlertType::GPS_SPOOFING),   "GPS_SPOOFING");
-    EXPECT_STREQ(alertTypeName(AlertType::ADSB_SPOOFING),  "ADSB_SPOOFING");
-    EXPECT_STREQ(alertTypeName(AlertType::ADSB_JAMMING),   "ADSB_JAMMING");
-    EXPECT_STREQ(alertTypeName(AlertType::AIS_SPOOFING),   "AIS_SPOOFING");
-    EXPECT_STREQ(alertTypeName(AlertType::EAS_SPOOFING),   "EAS_SPOOFING");
-    EXPECT_STREQ(alertTypeName(AlertType::DSC_SPOOFING),   "DSC_SPOOFING");
+TEST(RfAlert, TypeNameRoundTrip)
+{
+    EXPECT_STREQ(alertTypeName(AlertType::GPS_JAMMING), "GPS_JAMMING");
+    EXPECT_STREQ(alertTypeName(AlertType::GPS_SPOOFING), "GPS_SPOOFING");
+    EXPECT_STREQ(alertTypeName(AlertType::ADSB_SPOOFING), "ADSB_SPOOFING");
+    EXPECT_STREQ(alertTypeName(AlertType::ADSB_JAMMING), "ADSB_JAMMING");
+    EXPECT_STREQ(alertTypeName(AlertType::AIS_SPOOFING), "AIS_SPOOFING");
+    EXPECT_STREQ(alertTypeName(AlertType::EAS_SPOOFING), "EAS_SPOOFING");
+    EXPECT_STREQ(alertTypeName(AlertType::DSC_SPOOFING), "DSC_SPOOFING");
     EXPECT_STREQ(alertTypeName(AlertType::P25_ROGUE_SITE), "P25_ROGUE_SITE");
 }
 
-TEST(RfAlert, SeverityNameRoundTrip) {
-    EXPECT_STREQ(severityName(AlertSeverity::LOW),      "LOW");
-    EXPECT_STREQ(severityName(AlertSeverity::MEDIUM),   "MEDIUM");
-    EXPECT_STREQ(severityName(AlertSeverity::HIGH),     "HIGH");
+TEST(RfAlert, SeverityNameRoundTrip)
+{
+    EXPECT_STREQ(severityName(AlertSeverity::LOW), "LOW");
+    EXPECT_STREQ(severityName(AlertSeverity::MEDIUM), "MEDIUM");
+    EXPECT_STREQ(severityName(AlertSeverity::HIGH), "HIGH");
     EXPECT_STREQ(severityName(AlertSeverity::CRITICAL), "CRITICAL");
 }
 
-TEST(RfAlert, DefaultFieldsAreZero) {
+TEST(RfAlert, DefaultFieldsAreZero)
+{
     RfAlert a;
     EXPECT_DOUBLE_EQ(a.freq_hz, 0.0);
     EXPECT_FLOAT_EQ(a.power_db, 0.0f);
@@ -57,39 +62,49 @@ TEST(RfAlert, DefaultFieldsAreZero) {
 
 // ── MockAlertStore — captures alerts without a DB connection ──────────────────
 
-struct MockAlertStore {
+struct MockAlertStore
+{
     // Mimics AlertStore::insert() signature
     std::vector<RfAlert> alerts;
-    void insert(const RfAlert& a) { alerts.push_back(a); }
+
+    void insert(const RfAlert& a)
+    {
+        alerts.push_back(a);
+    }
 };
 
 // ── GpsMonitor helpers ────────────────────────────────────────────────────────
 
 // Build a flat-noise IQ signal at the given RMS power level (linear scale)
-static std::vector<float> makeNoise(size_t n_complex_samples, float rms) {
+static std::vector<float> makeNoise(size_t n_complex_samples, float rms)
+{
     std::vector<float> iq(n_complex_samples * 2);
-    for (size_t i = 0; i < iq.size(); i += 2) {
-        iq[i]   = rms;   // I
-        iq[i+1] = 0.0f;  // Q
+    for (size_t i = 0; i < iq.size(); i += 2)
+    {
+        iq[i]     = rms;   // I
+        iq[i + 1] = 0.0f;  // Q
     }
     return iq;
 }
 
 // Build a BPSK-shaped IQ signal (alternating ±1 symbols) at detectable power
-static std::vector<float> makeBpskSignal(size_t n_complex_samples, float amplitude) {
+static std::vector<float> makeBpskSignal(size_t n_complex_samples, float amplitude)
+{
     std::vector<float> iq(n_complex_samples * 2);
-    for (size_t i = 0; i < n_complex_samples; ++i) {
-        float sym = (i % 2 == 0) ? amplitude : -amplitude;
-        iq[2*i]   = sym;
-        iq[2*i+1] = 0.0f;
+    for (size_t i = 0; i < n_complex_samples; ++i)
+    {
+        float sym     = (i % 2 == 0) ? amplitude : -amplitude;
+        iq[2 * i]     = sym;
+        iq[2 * i + 1] = 0.0f;
     }
     return iq;
 }
 
 // ── GpsMonitor: quiet band → no alert ────────────────────────────────────────
 
-TEST(GpsMonitor, QuietBandProducesNoAlert) {
-    MockAlertStore mock;
+TEST(GpsMonitor, QuietBandProducesNoAlert)
+{
+    MockAlertStore       mock;
     std::vector<RfAlert> captured;
 
     GpsMonitor::Config cfg;
@@ -99,7 +114,8 @@ TEST(GpsMonitor, QuietBandProducesNoAlert) {
     cfg.check_interval_s     = 0.0;  // always check
 
     // Low-level noise: RMS = 0.0001 → power ≈ -80 dBFS, well below spoof threshold
-    auto fetch = [](au::QuantityD<au::Hertz>, au::QuantityD<au::Hertz>, double) {
+    auto fetch = [](au::QuantityD<au::Hertz>, au::QuantityD<au::Hertz>, double)
+    {
         return makeNoise(500, 0.0001f);
     };
 
@@ -119,46 +135,50 @@ TEST(GpsMonitor, QuietBandProducesNoAlert) {
 
 // ── GpsMonitor: power computation ────────────────────────────────────────────
 
-TEST(GpsMonitor, PowerComputationCorrect) {
+TEST(GpsMonitor, PowerComputationCorrect)
+{
     // makeNoise with RMS = 1.0 → power = 0 dBFS (20*log10(1.0) = 0)
     auto iq = makeNoise(1000, 1.0f);
     // Compute manually: RMS = sqrt(sum(I^2+Q^2)/N) = sqrt(1.0) = 1.0
     double sum = 0.0;
     for (size_t i = 0; i + 1 < iq.size(); i += 2)
-        sum += static_cast<double>(iq[i])*iq[i] + static_cast<double>(iq[i+1])*iq[i+1];
+        sum += static_cast<double>(iq[i]) * iq[i] + static_cast<double>(iq[i + 1]) * iq[i + 1];
     double rms = std::sqrt(sum / (iq.size() / 2));
     EXPECT_NEAR(rms, 1.0, 1e-5);
     float power_db = static_cast<float>(20.0 * std::log10(rms));
     EXPECT_NEAR(power_db, 0.0f, 0.01f);
 }
 
-TEST(GpsMonitor, LowPowerNoise) {
-    auto iq = makeNoise(1000, 0.001f);
+TEST(GpsMonitor, LowPowerNoise)
+{
+    auto   iq  = makeNoise(1000, 0.001f);
     double sum = 0.0;
     for (size_t i = 0; i + 1 < iq.size(); i += 2)
-        sum += static_cast<double>(iq[i])*iq[i] + static_cast<double>(iq[i+1])*iq[i+1];
-    double rms = std::sqrt(sum / (iq.size() / 2));
-    float power_db = static_cast<float>(20.0 * std::log10(rms));
+        sum += static_cast<double>(iq[i]) * iq[i] + static_cast<double>(iq[i + 1]) * iq[i + 1];
+    double rms      = std::sqrt(sum / (iq.size() / 2));
+    float  power_db = static_cast<float>(20.0 * std::log10(rms));
     EXPECT_NEAR(power_db, -60.0f, 0.1f);  // 20*log10(0.001) = -60 dB
 }
 
 // ── GpsMonitor: spoofing signal is detectable ─────────────────────────────────
 
-TEST(GpsMonitor, BpskSignalIsDetectable) {
+TEST(GpsMonitor, BpskSignalIsDetectable)
+{
     // A BPSK spoofing signal at amplitude=0.1 (−20 dBFS) is far above real GPS
-    auto iq = makeBpskSignal(1000, 0.1f);
+    auto   iq  = makeBpskSignal(1000, 0.1f);
     double sum = 0.0;
     for (size_t i = 0; i + 1 < iq.size(); i += 2)
-        sum += static_cast<double>(iq[i])*iq[i] + static_cast<double>(iq[i+1])*iq[i+1];
-    double rms = std::sqrt(sum / (iq.size() / 2));
-    float power_db = static_cast<float>(20.0 * std::log10(rms));
+        sum += static_cast<double>(iq[i]) * iq[i] + static_cast<double>(iq[i + 1]) * iq[i + 1];
+    double rms      = std::sqrt(sum / (iq.size() / 2));
+    float  power_db = static_cast<float>(20.0 * std::log10(rms));
     // amplitude=0.1 → RMS=0.1 → -20 dB — well above spoof_detectable_dbm (-110)
     EXPECT_GT(power_db, -30.0f);
 }
 
 // ── GpsMonitor: jammer delta calculation ─────────────────────────────────────
 
-TEST(GpsMonitor, JammerDeltaExceedsThreshold) {
+TEST(GpsMonitor, JammerDeltaExceedsThreshold)
+{
     // Baseline at RMS=0.0001 (-80 dBFS), jammer at RMS=1.0 (0 dBFS)
     // Delta = 80 dB > 20 dB threshold
     float baseline = 20.0f * std::log10(0.0001f);  // -80 dBFS
@@ -169,7 +189,8 @@ TEST(GpsMonitor, JammerDeltaExceedsThreshold) {
 
 // ── GpsMonitor: frequency coverage ───────────────────────────────────────────
 
-TEST(GpsMonitor, CoversBothL1L2L5) {
+TEST(GpsMonitor, CoversBothL1L2L5)
+{
     // Verify the three GPS frequencies are the ones we expect
     constexpr double L1 = 1'575'420'000.0;
     constexpr double L2 = 1'227'600'000.0;
@@ -187,7 +208,8 @@ TEST(GpsMonitor, CoversBothL1L2L5) {
 
 // ── GpsMonitor: tick rate limiting ────────────────────────────────────────────
 
-TEST(GpsMonitor, CheckIntervalRateLimits) {
+TEST(GpsMonitor, CheckIntervalRateLimits)
+{
     int call_count = 0;
 
     // Build a minimal AlertStore-compatible object
@@ -207,7 +229,8 @@ TEST(GpsMonitor, CheckIntervalRateLimits) {
 
 // ── RfAlert: high-severity alert populates all fields ─────────────────────────
 
-TEST(RfAlert, PopulateAllFields) {
+TEST(RfAlert, PopulateAllFields)
+{
     RfAlert a;
     a.type        = AlertType::GPS_JAMMING;
     a.severity    = AlertSeverity::CRITICAL;
@@ -217,12 +240,12 @@ TEST(RfAlert, PopulateAllFields) {
     a.details     = "GPS-L1 jammer: +75 dB above baseline";
     a.scanner_id  = "scanner-0";
 
-    EXPECT_EQ(a.type,     AlertType::GPS_JAMMING);
+    EXPECT_EQ(a.type, AlertType::GPS_JAMMING);
     EXPECT_EQ(a.severity, AlertSeverity::CRITICAL);
     EXPECT_DOUBLE_EQ(a.freq_hz, 1575420000.0);
-    EXPECT_FLOAT_EQ(a.power_db,    -45.0f);
+    EXPECT_FLOAT_EQ(a.power_db, -45.0f);
     EXPECT_FLOAT_EQ(a.baseline_db, -120.0f);
-    EXPECT_EQ(a.details,   "GPS-L1 jammer: +75 dB above baseline");
+    EXPECT_EQ(a.details, "GPS-L1 jammer: +75 dB above baseline");
     EXPECT_EQ(a.scanner_id, "scanner-0");
     EXPECT_GT(a.power_db - a.baseline_db, 20.0f);  // delta > threshold
 }

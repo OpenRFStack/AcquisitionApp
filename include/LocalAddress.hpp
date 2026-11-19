@@ -27,44 +27,57 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
 #include <cstring>
 #include <string>
 
-namespace acq {
+namespace acq
+{
 
 /// "amqp://user:pw@host:5672/vhost" → "host"; "[::1]:5672" → "::1".
-inline std::string urlHost(const std::string& url) {
+inline std::string urlHost(const std::string& url)
+{
     std::string s = url;
-    if (auto p = s.find("://"); p != std::string::npos) s = s.substr(p + 3);
-    if (auto p = s.find('/'); p != std::string::npos) s = s.substr(0, p);
-    if (auto p = s.rfind('@'); p != std::string::npos) s = s.substr(p + 1);
-    if (!s.empty() && s[0] == '[') {
+    if (auto p = s.find("://"); p != std::string::npos)
+        s = s.substr(p + 3);
+    if (auto p = s.find('/'); p != std::string::npos)
+        s = s.substr(0, p);
+    if (auto p = s.rfind('@'); p != std::string::npos)
+        s = s.substr(p + 1);
+    if (!s.empty() && s[0] == '[')
+    {
         auto e = s.find(']');
         return e == std::string::npos ? s.substr(1) : s.substr(1, e - 1);
     }
-    if (auto p = s.rfind(':'); p != std::string::npos) s = s.substr(0, p);
+    if (auto p = s.rfind(':'); p != std::string::npos)
+        s = s.substr(0, p);
     return s;
 }
 
 /// Local IPv4 address used to reach the host of @p url; @p fallback on failure.
 inline std::string localAddressTowards(const std::string& url,
-                                       const std::string& fallback = "127.0.0.1") {
+                                       const std::string& fallback = "127.0.0.1")
+{
     const std::string host = urlHost(url);
-    if (host.empty()) return fallback;
+    if (host.empty())
+        return fallback;
     addrinfo hints{};
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
-    addrinfo* res = nullptr;
-    if (::getaddrinfo(host.c_str(), "9", &hints, &res) != 0 || !res) return fallback;
+    addrinfo* res     = nullptr;
+    if (::getaddrinfo(host.c_str(), "9", &hints, &res) != 0 || !res)
+        return fallback;
     std::string out = fallback;
-    int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd >= 0) {
-        if (::connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
+    int         fd  = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd >= 0)
+    {
+        if (::connect(fd, res->ai_addr, res->ai_addrlen) == 0)
+        {
             sockaddr_in sa{};
-            socklen_t sl = sizeof sa;
-            char buf[INET_ADDRSTRLEN] = {};
-            if (::getsockname(fd, reinterpret_cast<sockaddr*>(&sa), &sl) == 0 &&
-                ::inet_ntop(AF_INET, &sa.sin_addr, buf, sizeof buf) && sa.sin_addr.s_addr != 0)
+            socklen_t   sl                   = sizeof sa;
+            char        buf[INET_ADDRSTRLEN] = {};
+            if (::getsockname(fd, reinterpret_cast<sockaddr*>(&sa), &sl) == 0
+                && ::inet_ntop(AF_INET, &sa.sin_addr, buf, sizeof buf) && sa.sin_addr.s_addr != 0)
                 out = buf;
         }
         ::close(fd);
@@ -73,7 +86,7 @@ inline std::string localAddressTowards(const std::string& url,
     return out;
 }
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

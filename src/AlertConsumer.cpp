@@ -11,11 +11,12 @@ Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
 #include "AlertConsumer.hpp"
+
 #include <proton/connection.hpp>
 #include <proton/connection_options.hpp>
-#include <proton/reconnect_options.hpp>
 #include <proton/delivery.hpp>
 #include <proton/message.hpp>
+#include <proton/reconnect_options.hpp>
 #include <spdlog/spdlog.h>
 // NOTE: deliberately no <nlohmann/json.hpp> here — combining <pqxx/pqxx>
 // (pulled in via AlertStore.hpp) with <optional> (pulled in by nlohmann)
@@ -25,57 +26,94 @@ Contact author for permission: https://github.com/OpenRFStack
 // with plain string operations instead.
 #include <mutex>
 
-namespace acq {
+namespace acq
+{
 
 // ── Minimal JSON field extractor (no deps on nlohmann / optional) ─────────────
-static std::string jsonStr(const std::string& body, const char* key) {
+static std::string jsonStr(const std::string& body, const char* key)
+{
     std::string search = std::string("\"") + key + "\":\"";
-    auto pos = body.find(search);
-    if (pos == std::string::npos) return {};
+    auto        pos    = body.find(search);
+    if (pos == std::string::npos)
+        return {};
     pos += search.size();
     auto end = body.find('"', pos);
     return end == std::string::npos ? std::string{} : body.substr(pos, end - pos);
 }
 
-static double jsonDouble(const std::string& body, const char* key) {
+static double jsonDouble(const std::string& body, const char* key)
+{
     std::string search = std::string("\"") + key + "\":";
-    auto pos = body.find(search);
-    if (pos == std::string::npos) return 0.0;
+    auto        pos    = body.find(search);
+    if (pos == std::string::npos)
+        return 0.0;
     pos += search.size();
-    try { return std::stod(body.substr(pos)); } catch (...) { return 0.0; }
+    try
+    {
+        return std::stod(body.substr(pos));
+    }
+    catch (...)
+    {
+        return 0.0;
+    }
 }
 
-AlertConsumer::AlertConsumer(std::string url, std::string user, std::string pass,
-                             AlertStore& store, std::string topic)
-    : url_(std::move(url)), user_(std::move(user)), pass_(std::move(pass)),
-      store_(store), topic_(std::move(topic)), container_(*this) {}
-
-AlertConsumer::~AlertConsumer() { stop(); }
-
-void AlertConsumer::start() {
-    worker_ = std::thread([this]{ workerLoop(); });
-    thread_ = std::thread([this]{ container_.run(); });
+AlertConsumer::AlertConsumer(
+    std::string url, std::string user, std::string pass, AlertStore& store, std::string topic)
+    : url_(std::move(url))
+    , user_(std::move(user))
+    , pass_(std::move(pass))
+    , store_(store)
+    , topic_(std::move(topic))
+    , container_(*this)
+{
 }
 
-void AlertConsumer::stop() {
+AlertConsumer::~AlertConsumer()
+{
+    stop();
+}
+
+void AlertConsumer::start()
+{
+    worker_ = std::thread(
+        [this]
+        {
+            workerLoop();
+        });
+    thread_ = std::thread(
+        [this]
+        {
+            container_.run();
+        });
+}
+
+void AlertConsumer::stop()
+{
     stopping_ = true;
     container_.stop();
-    if (thread_.joinable()) thread_.join();
+    if (thread_.joinable())
+        thread_.join();
     {
         std::lock_guard<std::mutex> lk(work_mu_);
         worker_stopping_ = true;
     }
     work_cv_.notify_one();
-    if (worker_.joinable()) worker_.join();
+    if (worker_.joinable())
+        worker_.join();
 }
 
-void AlertConsumer::on_container_start(proton::container& c) {
+void AlertConsumer::on_container_start(proton::container& c)
+{
     proton::connection_options opts;
-    if (!user_.empty()) {
+    if (!user_.empty())
+    {
         opts.sasl_allowed_mechs("PLAIN");
         opts.sasl_allow_insecure_mechs(true);
         opts.user(user_).password(pass_);
-    } else {
+    }
+    else
+    {
         opts.sasl_allowed_mechs("ANONYMOUS");
     }
     // Without this, a failed initial connection (Artemis not up yet) is
@@ -83,49 +121,63 @@ void AlertConsumer::on_container_start(proton::container& c) {
     // again, so alerts would never get persisted to the rf_alerts table.
     proton::reconnect_options ropts;
     ropts.delay(proton::duration(2000));
-    ropts.max_delay(proton::duration(30000));
+    ropts.max_delay(proton::duration(30'000));
     ropts.max_attempts(0);
     opts.reconnect(ropts);
     c.connect(url_, opts);
 }
 
-void AlertConsumer::on_connection_open(proton::connection& c) {
+void AlertConsumer::on_connection_open(proton::connection& c)
+{
     c.open_receiver(topic_);
     spdlog::info("[AlertConsumer] subscribed → {}", topic_);
 }
 
-void AlertConsumer::on_message(proton::delivery& d, proton::message& msg) {
+void AlertConsumer::on_message(proton::delivery& d, proton::message& msg)
+{
     d.accept();
-    try {
+    try
+    {
         auto body = proton::get<std::string>(msg.body());
-        if (body.empty()) return;
+        if (body.empty())
+            return;
 
         std::string type_str = jsonStr(body, "type");
         std::string sev_str  = jsonStr(body, "severity");
         std::string details  = jsonStr(body, "details");
-        double freq_hz       = jsonDouble(body, "freq_hz");
+        double      freq_hz  = jsonDouble(body, "freq_hz");
 
         static const std::pair<const char*, AlertType> type_map[] = {
-            {"GPS_JAMMING",    AlertType::GPS_JAMMING},
-            {"GPS_SPOOFING",   AlertType::GPS_SPOOFING},
-            {"ADSB_SPOOFING",  AlertType::ADSB_SPOOFING},
-            {"ADSB_JAMMING",   AlertType::ADSB_JAMMING},
-            {"AIS_SPOOFING",   AlertType::AIS_SPOOFING},
-            {"EAS_SPOOFING",   AlertType::EAS_SPOOFING},
-            {"DSC_SPOOFING",   AlertType::DSC_SPOOFING},
+            {"GPS_JAMMING", AlertType::GPS_JAMMING},
+            {"GPS_SPOOFING", AlertType::GPS_SPOOFING},
+            {"ADSB_SPOOFING", AlertType::ADSB_SPOOFING},
+            {"ADSB_JAMMING", AlertType::ADSB_JAMMING},
+            {"AIS_SPOOFING", AlertType::AIS_SPOOFING},
+            {"EAS_SPOOFING", AlertType::EAS_SPOOFING},
+            {"DSC_SPOOFING", AlertType::DSC_SPOOFING},
             {"P25_ROGUE_SITE", AlertType::P25_ROGUE_SITE},
         };
-        AlertType type = AlertType::GPS_JAMMING;
-        bool found = false;
-        for (const auto& [k, v] : type_map) {
-            if (type_str == k) { type = v; found = true; break; }
+        AlertType type  = AlertType::GPS_JAMMING;
+        bool      found = false;
+        for (const auto& [k, v] : type_map)
+        {
+            if (type_str == k)
+            {
+                type  = v;
+                found = true;
+                break;
+            }
         }
-        if (!found) return;
+        if (!found)
+            return;
 
         AlertSeverity sev = AlertSeverity::MEDIUM;
-        if      (sev_str == "LOW")      sev = AlertSeverity::LOW;
-        else if (sev_str == "HIGH")     sev = AlertSeverity::HIGH;
-        else if (sev_str == "CRITICAL") sev = AlertSeverity::CRITICAL;
+        if (sev_str == "LOW")
+            sev = AlertSeverity::LOW;
+        else if (sev_str == "HIGH")
+            sev = AlertSeverity::HIGH;
+        else if (sev_str == "CRITICAL")
+            sev = AlertSeverity::CRITICAL;
 
         RfAlert alert;
         alert.type     = type;
@@ -140,34 +192,48 @@ void AlertConsumer::on_message(proton::delivery& d, proton::message& msg) {
             work_q_.push(std::move(alert));
         }
         work_cv_.notify_one();
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e)
+    {
         spdlog::warn("[AlertConsumer] parse error: {}", e.what());
     }
 }
 
-void AlertConsumer::workerLoop() {
-    while (true) {
+void AlertConsumer::workerLoop()
+{
+    while (true)
+    {
         RfAlert alert;
         {
             std::unique_lock<std::mutex> lk(work_mu_);
-            work_cv_.wait(lk, [this]{ return !work_q_.empty() || worker_stopping_; });
-            if (worker_stopping_ && work_q_.empty()) break;
+            work_cv_.wait(lk,
+                          [this]
+                          {
+                              return !work_q_.empty() || worker_stopping_;
+                          });
+            if (worker_stopping_ && work_q_.empty())
+                break;
             alert = std::move(work_q_.front());
             work_q_.pop();
         }
-        try { store_.insert(alert); }
-        catch (const std::exception& e) {
+        try
+        {
+            store_.insert(alert);
+        }
+        catch (const std::exception& e)
+        {
             spdlog::error("[AlertConsumer] insert error: {}", e.what());
         }
     }
 }
 
-void AlertConsumer::on_error(const proton::error_condition& e) {
+void AlertConsumer::on_error(const proton::error_condition& e)
+{
     if (!stopping_)
         spdlog::warn("[AlertConsumer] error: {}", e.what());
 }
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

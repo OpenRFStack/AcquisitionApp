@@ -35,17 +35,20 @@ Contact author for permission: https://github.com/OpenRFStack
  */
 #include "AlertStore.hpp"
 #include "RfAlert.hpp"
-#include <proton/messaging_handler.hpp>
+
 #include <proton/container.hpp>
+#include <proton/messaging_handler.hpp>
 #include <proton/receiver.hpp>
-#include <thread>
-#include <string>
+
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <queue>
-#include <condition_variable>
+#include <string>
+#include <thread>
 
-namespace acq {
+namespace acq
+{
 
 /**
  * @class AlertConsumer
@@ -55,7 +58,8 @@ namespace acq {
  * the main loop and stop() during shutdown.  Thread-safe: the AMQP callback
  * and AlertStore::insert() both execute on the proton thread.
  */
-class AlertConsumer : public proton::messaging_handler {
+class AlertConsumer : public proton::messaging_handler
+{
 public:
     /**
      * @brief Construct the consumer.
@@ -65,8 +69,11 @@ public:
      * @param store Reference to the AlertStore that will persist incoming alerts.
      * @param topic AMQP address to subscribe to (default: @c "rf.alerts").
      */
-    AlertConsumer(std::string url, std::string user, std::string pass,
-                  AlertStore& store, std::string topic = "rf.alerts");
+    AlertConsumer(std::string url,
+                  std::string user,
+                  std::string pass,
+                  AlertStore& store,
+                  std::string topic = "rf.alerts");
 
     /// @brief Stop the receiver and join the AMQP thread.
     ~AlertConsumer();
@@ -94,14 +101,14 @@ private:
     std::thread       thread_;
     std::atomic<bool> stopping_{false};
 
-    std::mutex               work_mu_;
-    std::queue<RfAlert>      work_q_;
-    std::condition_variable  work_cv_;
-    std::thread              worker_;
-    bool                     worker_stopping_{false};
+    std::mutex              work_mu_;
+    std::queue<RfAlert>     work_q_;
+    std::condition_variable work_cv_;
+    std::thread             worker_;
+    bool                    worker_stopping_{false};
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

@@ -18,18 +18,20 @@ Contact author for permission: https://github.com/OpenRFStack
  * A Detection is produced by SpectrumScanner for each confirmed signal and
  * forwarded to AmqpPublisher (AMQP) and DetectionDb (PostgreSQL).
  */
-#include <au/units/hertz.hh>
-#include <au/units/seconds.hh>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
-#include <cstdint>
 #include <vector>
+
+#include <au/units/hertz.hh>
+#include <au/units/seconds.hh>
 
 /// @namespace acq
 /// @brief AcquisitionApp internals.
-namespace acq {
+namespace acq
+{
 
 /// @brief RF_DETECTION schema version emitted by this build.
 inline constexpr const char* SCHEMA_VERSION = "1.2";  // base64 iq_snapshot, snr_db
@@ -44,30 +46,33 @@ inline constexpr const char* SCHEMA_VERSION = "1.2";  // base64 iq_snapshot, snr
  * The @p iq_snapshot is shared across all detections from the same dwell
  * via shared_ptr — zero copies regardless of how many signals are found.
  */
-struct Detection {
-    std::chrono::system_clock::time_point timestamp; ///< Wall-clock time of detection.
-    au::QuantityD<au::Hertz> center_freq_hz{au::hertz(0.0)}; ///< Sub-bin interpolated centre frequency.
-    au::QuantityD<au::Hertz> bandwidth_hz{au::hertz(0.0)};   ///< Estimated occupied bandwidth.
-    float       power_db{0.f};       ///< Peak power in the detection run (dBFS).
-    std::string scanner_id;          ///< Scanner identifier from SweepConfig.
-    int         channel{0};          ///< RX channel index (0-based).
-    float       snr_db{0.f};         ///< PAPR of the detected signal group (peak − mean, dB).
+struct Detection
+{
+    std::chrono::system_clock::time_point timestamp;  ///< Wall-clock time of detection.
+    au::QuantityD<au::Hertz>              center_freq_hz{
+        au::hertz(0.0)};  ///< Sub-bin interpolated centre frequency.
+    au::QuantityD<au::Hertz> bandwidth_hz{au::hertz(0.0)};  ///< Estimated occupied bandwidth.
+    float                    power_db{0.f};  ///< Peak power in the detection run (dBFS).
+    std::string              scanner_id;     ///< Scanner identifier from SweepConfig.
+    int                      channel{0};     ///< RX channel index (0-based).
+    float                    snr_db{0.f};  ///< PAPR of the detected signal group (peak − mean, dB).
 
     /// 1 024-sample IQ snapshot from the detecting dwell (interleaved float32 I,Q,…).
     /// Shared across all detections from the same dwell — zero-copy shared_ptr.
     /// Null when no snapshot was collected (unit tests or snapshot disabled).
     std::shared_ptr<const std::vector<float>> iq_snapshot;
-    au::QuantityD<au::Hertz> snapshot_sample_rate_sps{au::hertz(0.0)}; ///< Sample rate of the IQ snapshot.
+    au::QuantityD<au::Hertz>                  snapshot_sample_rate_sps{
+        au::hertz(0.0)};  ///< Sample rate of the IQ snapshot.
 
     /// @name GPS position (from GpsApp — nullopt when GpsApp is not running or has no fix)
     /// @{
-    std::optional<double> lat;   ///< Latitude (decimal degrees, WGS-84) at time of detection.
-    std::optional<double> lon;   ///< Longitude (decimal degrees, WGS-84) at time of detection.
-    std::optional<double> alt_m; ///< Altitude above MSL (metres) at time of detection.
+    std::optional<double> lat;    ///< Latitude (decimal degrees, WGS-84) at time of detection.
+    std::optional<double> lon;    ///< Longitude (decimal degrees, WGS-84) at time of detection.
+    std::optional<double> alt_m;  ///< Altitude above MSL (metres) at time of detection.
     /// @}
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

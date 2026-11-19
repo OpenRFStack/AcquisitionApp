@@ -23,14 +23,19 @@ Contact author for permission: https://github.com/OpenRFStack
  * @see RfAlert, AlertConsumer
  */
 #include "RfAlert.hpp"
+
 #include <memory>
 #include <string>
 
 // Forward-declare pqxx::connection so we can hold a unique_ptr without
 // including <pqxx/pqxx> in this header.
-namespace pqxx { class connection; }
+namespace pqxx
+{
+class connection;
+}  // namespace pqxx
 
-namespace acq {
+namespace acq
+{
 
 /**
  * @class AlertStore
@@ -41,7 +46,8 @@ namespace acq {
  * exception is caught, logged via spdlog, and swallowed so the calling
  * thread is never interrupted by a transient database error.
  */
-class AlertStore {
+class AlertStore
+{
 public:
     /**
      * @brief Construct an AlertStore and open the database connection.
@@ -69,7 +75,7 @@ private:
     std::unique_ptr<pqxx::connection> conn_;
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

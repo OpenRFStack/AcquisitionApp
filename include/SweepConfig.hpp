@@ -21,43 +21,49 @@ Contact author for permission: https://github.com/OpenRFStack
  * All sub-structs (AmqpConfig, DeviceConfig, SweepParams, etc.) are
  * populated from the corresponding XML elements.
  */
-#include <au/units/hertz.hh>
-#include <au/units/seconds.hh>
-#include <au/prefix.hh>
-#include <string>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
-namespace acq {
+#include <au/prefix.hh>
+#include <au/units/hertz.hh>
+#include <au/units/seconds.hh>
+
+namespace acq
+{
 
 /// @brief AMQP broker connection and topic configuration.
-struct AmqpConfig {
+struct AmqpConfig
+{
     std::string url{"amqp://localhost:5672"};              ///< Broker URL.
-    std::string username;                                   ///< AMQP username.
-    std::string password;                                   ///< AMQP password.
-    std::string detection_topic{"rf.detections"};           ///< Topic for RF_DETECTION messages.
+    std::string username;                                  ///< AMQP username.
+    std::string password;                                  ///< AMQP password.
+    std::string detection_topic{"rf.detections"};          ///< Topic for RF_DETECTION messages.
     std::string task_request_queue{"sdr.task.request"};    ///< Queue for outbound task requests.
     std::string task_response_queue{"sdr.task.response"};  ///< Queue for inbound task responses.
-    int reconnect_interval_sec{5}; ///< Seconds between reconnect attempts on AMQP error.
+    int         reconnect_interval_sec{5};  ///< Seconds between reconnect attempts on AMQP error.
 };
 
 /// @brief PostgreSQL detection database connection parameters.
-struct DbConfig {
-    std::string host{"localhost"};      ///< Database host.
-    int         port{5432};             ///< Database port.
-    std::string name{"sdr_scanner"};    ///< Database name.
-    std::string user;                   ///< Database user.
-    std::string password;               ///< Database password.
+struct DbConfig
+{
+    std::string host{"localhost"};    ///< Database host.
+    int         port{5432};           ///< Database port.
+    std::string name{"sdr_scanner"};  ///< Database name.
+    std::string user;                 ///< Database user.
+    std::string password;             ///< Database password.
     /// @brief Build a libpqxx connection string from these parameters.
     std::string connection_string() const;
 };
 
 /// @brief SDR hardware configuration.
-struct DeviceConfig {
-    int    rx_channels{1};       ///< Number of RX channels to request.
-    au::QuantityD<au::Hertz> sample_rate{au::hertz(10e6)};    ///< Sample rate (samples/s).
-    double rx_gain_db{40.0};     ///< RX gain (dB).
-    au::QuantityD<au::Hertz> bandwidth_hz{au::hertz(10e6)};   ///< Requested RF bandwidth per channel.
+struct DeviceConfig
+{
+    int                      rx_channels{1};                ///< Number of RX channels to request.
+    au::QuantityD<au::Hertz> sample_rate{au::hertz(10e6)};  ///< Sample rate (samples/s).
+    double                   rx_gain_db{40.0};              ///< RX gain (dB).
+    au::QuantityD<au::Hertz> bandwidth_hz{
+        au::hertz(10e6)};  ///< Requested RF bandwidth per channel.
     /// When non-empty: hard-pin all tasks from this scanner to this device and
     /// suppress auto-split (both slices would need the same device anyway on
     /// shared-LO hardware, so splitting just causes sequential retries).
@@ -70,31 +76,34 @@ struct DeviceConfig {
  * These parameters control the core detection pipeline.
  * See the README "Sweep parameters" table for the effect of each value.
  */
-struct SweepParams {
+struct SweepParams
+{
     au::QuantityD<au::Hertz> start_hz{au::hertz(70'000'000.0)};    ///< Sweep start frequency.
     au::QuantityD<au::Hertz> stop_hz{au::hertz(1'000'000'000.0)};  ///< Sweep stop frequency.
-    int      dwell_samples{4096};        ///< IQ samples collected per dwell (≥ fft_size).
-    int      fft_size{4096};             ///< FFT size (power of 2, ≥ 64).
-    double   usable_bw_fraction{0.80};   ///< Fraction of FFT bins examined (discards roll-off edges).
-    double   threshold_db{10.0};         ///< Detection threshold above local CA-CFAR noise (dB).
-    au::QuantityD<au::Hertz> min_signal_bw_hz{au::hertz(1'000.0)}; ///< Minimum run width to report.
-    int      settle_samples{512};        ///< Samples discarded after each retune.
+    int                      dwell_samples{4096};  ///< IQ samples collected per dwell (≥ fft_size).
+    int                      fft_size{4096};       ///< FFT size (power of 2, ≥ 64).
+    double usable_bw_fraction{0.80};  ///< Fraction of FFT bins examined (discards roll-off edges).
+    double threshold_db{10.0};        ///< Detection threshold above local CA-CFAR noise (dB).
+    au::QuantityD<au::Hertz> min_signal_bw_hz{
+        au::hertz(1'000.0)};  ///< Minimum run width to report.
+    int settle_samples{512};  ///< Samples discarded after each retune.
     /// Bins within this range of DC are blanked to suppress AD9361 LO leakage.
     /// Set 0 to disable.
     au::QuantityD<au::Hertz> dc_guard_hz{au::hertz(50'000.0)};
-    int      cfar_guard_bins{8};         ///< CA-CFAR guard cells each side of test bin.
-    int      cfar_ref_bins{32};          ///< CA-CFAR reference cells each side for noise average.
+    int                      cfar_guard_bins{8};  ///< CA-CFAR guard cells each side of test bin.
+    int cfar_ref_bins{32};  ///< CA-CFAR reference cells each side for noise average.
     /// Minimum peak-to-mean power ratio (dB) for multi-bin runs.
     /// Flat noise bumps below this threshold are rejected.
-    float    min_papr_db{3.0f};
+    float min_papr_db{3.0f};
     /// EMA coefficient for the per-frequency noise floor tracker.
     /// Smaller = slower adaptation.  Range (0, 1).
-    float    noise_floor_alpha{0.08f};
+    float noise_floor_alpha{0.08f};
 };
 
 /// @brief UDP receive parameters for IQ data from SdrResourceManager.
-struct ReceiverConfig {
-    std::string local_ip{"0.0.0.0"}; ///< Local IP to bind (must be routable from the controller).
+struct ReceiverConfig
+{
+    std::string local_ip{"0.0.0.0"};  ///< Local IP to bind (must be routable from the controller).
     int         port{0};              ///< UDP port to pre-bind.  0 = OS-assigned.
 };
 
@@ -105,24 +114,26 @@ struct ReceiverConfig {
  * system behaves identically to a version without threat detection unless
  * explicitly enabled in scanner.xml.
  */
-struct ThreatConfig {
-    bool enabled{false};              ///< Master switch — disables all threat detection when false.
+struct ThreatConfig
+{
+    bool enabled{false};  ///< Master switch — disables all threat detection when false.
 
     // ── GPS frequency monitoring ─────────────────────────────────────────────
-    bool gps_enabled{false};          ///< Scan L1/L2/L5 for jammers and spoofers.
-    double gps_jammer_threshold_db{20.0}; ///< dB above EMA baseline to declare jamming.
-    double gps_spoof_detectable_dbm{-110.0}; ///< Any GPS-band signal above this = spoofing suspect.
-    double gps_check_interval_s{30.0};   ///< Seconds between L1/L2/L5 checks.
+    bool   gps_enabled{false};             ///< Scan L1/L2/L5 for jammers and spoofers.
+    double gps_jammer_threshold_db{20.0};  ///< dB above EMA baseline to declare jamming.
+    double gps_spoof_detectable_dbm{
+        -110.0};                        ///< Any GPS-band signal above this = spoofing suspect.
+    double gps_check_interval_s{30.0};  ///< Seconds between L1/L2/L5 checks.
 
     // ── Content-layer validators (run inside DemodApp demodulators) ──────────
-    bool adsb_enabled{true};          ///< ADS-B physics validation (impossible altitude/speed/CRC rate).
-    bool ais_enabled{true};           ///< AIS impossible vessel speed / invalid MMSI.
-    bool eas_enabled{true};           ///< EAS/SAME invalid originator or rare event code.
-    bool dsc_enabled{true};           ///< DSC distress call MMSI anomaly detection.
-    bool p25_rogue_enabled{true};     ///< P25 rogue site (unexpected WACN change).
+    bool adsb_enabled{true};  ///< ADS-B physics validation (impossible altitude/speed/CRC rate).
+    bool ais_enabled{true};   ///< AIS impossible vessel speed / invalid MMSI.
+    bool eas_enabled{true};   ///< EAS/SAME invalid originator or rare event code.
+    bool dsc_enabled{true};   ///< DSC distress call MMSI anomaly detection.
+    bool p25_rogue_enabled{true};  ///< P25 rogue site (unexpected WACN change).
 
     // ── Alert persistence ────────────────────────────────────────────────────
-    std::string alert_topic{"rf.alerts"}; ///< AMQP topic alerts are published to by DemodApp.
+    std::string alert_topic{"rf.alerts"};  ///< AMQP topic alerts are published to by DemodApp.
 };
 
 /**
@@ -132,12 +143,13 @@ struct ThreatConfig {
  * dedicated IqSource to each voice channel grant published by DemodApp,
  * capturing IQ for @p capture_s seconds per grant.
  */
-struct P25Config {
-    bool        enabled{false};                        ///< Enable voice channel following.
-    std::string grant_topic{"rf.p25.grants"};          ///< AMQP topic DemodApp publishes grants to.
-    double      capture_s{3.0};                        ///< IQ capture duration per voice grant (s).
-    int         rank{3};                               ///< Preemption rank for voice captures (highest).
-    std::vector<uint32_t> tg_whitelist;                ///< Talk groups to follow; empty = all.
+struct P25Config
+{
+    bool        enabled{false};                ///< Enable voice channel following.
+    std::string grant_topic{"rf.p25.grants"};  ///< AMQP topic DemodApp publishes grants to.
+    double      capture_s{3.0};                ///< IQ capture duration per voice grant (s).
+    int         rank{3};                       ///< Preemption rank for voice captures (highest).
+    std::vector<uint32_t> tg_whitelist;        ///< Talk groups to follow; empty = all.
 };
 
 /**
@@ -158,11 +170,12 @@ struct P25Config {
  *   </band>
  * @endcode
  */
-struct BandConfig {
-    std::string device_id;                              ///< Empty = SdrRM assigns next available.
-    bool        device_required{false};                 ///< When true, device_id is a hard constraint.
-    au::QuantityD<au::Hertz> start_hz{au::hertz(0.0)}; ///< Band start frequency.
-    au::QuantityD<au::Hertz> stop_hz{au::hertz(0.0)};  ///< Band stop frequency.
+struct BandConfig
+{
+    std::string device_id;               ///< Empty = SdrRM assigns next available.
+    bool        device_required{false};  ///< When true, device_id is a hard constraint.
+    au::QuantityD<au::Hertz> start_hz{au::hertz(0.0)};  ///< Band start frequency.
+    au::QuantityD<au::Hertz> stop_hz{au::hertz(0.0)};   ///< Band stop frequency.
 };
 
 /// SdrResourceManager rejects scan entries shorter than this (doAcceptScan:
@@ -173,8 +186,10 @@ inline constexpr int kControllerMinDwellMs = 5;
 /// @p sample_rate_sps, never below the controller's minimum. Truncating to
 /// whole milliseconds used to give 1 ms for the shipped scanner.xml (4096
 /// samples at 10 MS/s = 0.41 ms) and every scan request was rejected.
-inline int scanDwellMs(int dwell_samples, double sample_rate_sps) {
-    if (sample_rate_sps <= 0.0) return kControllerMinDwellMs;
+inline int scanDwellMs(int dwell_samples, double sample_rate_sps)
+{
+    if (sample_rate_sps <= 0.0)
+        return kControllerMinDwellMs;
     const double ms = std::ceil(dwell_samples * 1000.0 / sample_rate_sps);
     return ms < kControllerMinDwellMs ? kControllerMinDwellMs : (int)ms;
 }
@@ -191,21 +206,26 @@ inline int scanDwellMs(int dwell_samples, double sample_rate_sps) {
  * yields one entry at the span centre; it used to yield none, and the
  * controller rejects an empty scan.
  */
-inline std::vector<double> scanEntryCenters(double start_hz, double stop_hz,
-                                            double step_hz, double resume_hz) {
+inline std::vector<double>
+scanEntryCenters(double start_hz, double stop_hz, double step_hz, double resume_hz)
+{
     std::vector<double> grid;
     if (step_hz > 0.0)
         for (int k = 0; start_hz + (k + 0.5) * step_hz <= stop_hz; ++k)
             grid.push_back(start_hz + (k + 0.5) * step_hz);
-    if (grid.empty()) return {0.5 * (start_hz + stop_hz)};
+    if (grid.empty())
+        return {0.5 * (start_hz + stop_hz)};
     int first = 0;
-    if (resume_hz > start_hz) {
+    if (resume_hz > start_hz)
+    {
         first = (int)std::floor((resume_hz - start_hz) / step_hz + 1e-9);
-        if (first >= (int)grid.size()) first = 0;
+        if (first >= (int)grid.size())
+            first = 0;
     }
     std::vector<double> out;
     out.reserve(grid.size());
-    for (size_t i = 0; i < grid.size(); ++i) out.push_back(grid[(first + i) % grid.size()]);
+    for (size_t i = 0; i < grid.size(); ++i)
+        out.push_back(grid[(first + i) % grid.size()]);
     return out;
 }
 
@@ -218,17 +238,19 @@ inline std::vector<double> scanEntryCenters(double start_hz, double stop_hz,
  * the per-frequency maps, lost persistence history) and skipped the entry
  * that was cut short.
  */
-inline double resumeAfterDwell(double start_hz, double stop_hz, double step_hz,
-                               double completed_hz) {
-    if (step_hz <= 0.0) return start_hz;
-    const int k = (int)std::floor((completed_hz - start_hz) / step_hz);
+inline double resumeAfterDwell(double start_hz, double stop_hz, double step_hz, double completed_hz)
+{
+    if (step_hz <= 0.0)
+        return start_hz;
+    const int    k    = (int)std::floor((completed_hz - start_hz) / step_hz);
     const double next = start_hz + (k + 1) * step_hz;
     return (next + 0.5 * step_hz > stop_hz) ? start_hz : next;
 }
 
-struct SweepConfig {
-    std::string    scanner_id{"scanner-0"}; ///< Identifies this scanner in AMQP messages.
-    int            rank{1};  ///< Preemption tier: 1=Acq (lowest), 2=Ana, 3=DF (highest).
+struct SweepConfig
+{
+    std::string scanner_id{"scanner-0"};  ///< Identifies this scanner in AMQP messages.
+    int         rank{1};  ///< Preemption tier: 1=Acq (lowest), 2=Ana, 3=DF (highest).
     /// Duration to sleep after each sweep pass before re-submitting the SCAN task.
     /// Gives AnalysisApp (lower rank) a guaranteed window to grab the SDR.
     /// 0 = disabled (continuous sweep, no analysis window).
@@ -244,7 +266,7 @@ struct SweepConfig {
      *
      * When empty, falls back to the legacy scan_device_ids / single-sweep behaviour.
      */
-    std::vector<BandConfig>  bands;
+    std::vector<BandConfig> bands;
 
     /**
      * @brief Legacy fixed-device scan list.
@@ -255,13 +277,13 @@ struct SweepConfig {
      */
     std::vector<std::string> scan_device_ids;
 
-    AmqpConfig     amqp;     ///< AMQP broker connection and topic config.
-    DbConfig       db;       ///< PostgreSQL connection config.
-    DeviceConfig   device;   ///< SDR hardware capabilities to request from SdrRM.
-    SweepParams    sweep;    ///< Frequency sweep and detection parameters (shared defaults).
-    ReceiverConfig receiver; ///< UDP IQ receive socket config.
-    P25Config      p25;      ///< P25 voice channel follower (disabled by default).
-    ThreatConfig   threat;   ///< Threat detection monitors (all disabled by default).
+    AmqpConfig     amqp;      ///< AMQP broker connection and topic config.
+    DbConfig       db;        ///< PostgreSQL connection config.
+    DeviceConfig   device;    ///< SDR hardware capabilities to request from SdrRM.
+    SweepParams    sweep;     ///< Frequency sweep and detection parameters (shared defaults).
+    ReceiverConfig receiver;  ///< UDP IQ receive socket config.
+    P25Config      p25;       ///< P25 voice channel follower (disabled by default).
+    ThreatConfig   threat;    ///< Threat detection monitors (all disabled by default).
 
     /**
      * @brief Load SweepConfig from an XML file.
@@ -294,11 +316,10 @@ struct SweepConfig {
      * @param n_devices Number of online devices reported by SdrRM.
      * @return Expanded band list with device_id inherited from the parent band.
      */
-    static std::vector<BandConfig> splitBands(const std::vector<BandConfig>& bands,
-                                               int n_devices);
+    static std::vector<BandConfig> splitBands(const std::vector<BandConfig>& bands, int n_devices);
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

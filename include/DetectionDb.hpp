@@ -24,17 +24,20 @@ Contact author for permission: https://github.com/OpenRFStack
  * - @p flush_interval elapsed since the last flush.
  */
 #include "Types.hpp"
-#include <au/units/seconds.hh>
-#include <au/prefix.hh>
-#include <pqxx/pqxx>
-#include <queue>
-#include <mutex>
+
+#include <atomic>
 #include <condition_variable>
+#include <mutex>
+#include <queue>
 #include <thread>
 #include <vector>
-#include <atomic>
 
-namespace acq {
+#include <au/prefix.hh>
+#include <au/units/seconds.hh>
+#include <pqxx/pqxx>
+
+namespace acq
+{
 
 /**
  * @brief Writes Detection records to PostgreSQL in background batches.
@@ -42,7 +45,8 @@ namespace acq {
  * Non-copyable.  push() is safe to call from any thread.
  * The destructor flushes remaining records and joins the writer thread.
  */
-class DetectionDb {
+class DetectionDb
+{
 public:
     /**
      * @brief Open a PostgreSQL connection and start the writer thread.
@@ -51,8 +55,8 @@ public:
      * @param flush_interval  Flush after this interval even if batch is not full.
      * @throws std::exception if the initial connection fails.
      */
-    explicit DetectionDb(const std::string& conn_str,
-                         int batch_size = 100,
+    explicit DetectionDb(const std::string&         conn_str,
+                         int                        batch_size     = 100,
                          au::QuantityD<au::Seconds> flush_interval = au::milli(au::seconds)(500.0));
     ~DetectionDb();
 
@@ -70,21 +74,21 @@ public:
     void push(const Detection& d);
 
 private:
-    std::string                 conn_str_;
-    pqxx::connection            conn_;
-    std::queue<Detection>       queue_;
-    std::mutex                  mutex_;
-    std::condition_variable     cv_;
-    std::atomic<bool>           stopped_{false};
-    std::thread                 thread_;
-    int                         batch_size_;
-    au::QuantityD<au::Seconds>  flush_interval_;
+    std::string                conn_str_;
+    pqxx::connection           conn_;
+    std::queue<Detection>      queue_;
+    std::mutex                 mutex_;
+    std::condition_variable    cv_;
+    std::atomic<bool>          stopped_{false};
+    std::thread                thread_;
+    int                        batch_size_;
+    au::QuantityD<au::Seconds> flush_interval_;
 
     void workerLoop();
     void flush(std::vector<Detection>& batch);
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

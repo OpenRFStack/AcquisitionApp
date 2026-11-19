@@ -35,13 +35,16 @@ Contact author for permission: https://github.com/OpenRFStack
  *
  * **Thread safety** — one instance per thread (owns FFTW plan and scratch buffers).
  */
-#include <au/units/hertz.hh>
-#include <complex>
-#include <vector>
-#include <cstdint>
 #include <fftw3.h>
 
-namespace acq {
+#include <complex>
+#include <cstdint>
+#include <vector>
+
+#include <au/units/hertz.hh>
+
+namespace acq
+{
 
 /**
  * @brief FFT-based signal detector for one IQ dwell.
@@ -49,17 +52,19 @@ namespace acq {
  * Instantiate once per processing thread.  Call computeSpectrum() then
  * detectFromSpectrum() on each dwell, or use the convenience detect() wrapper.
  */
-class FftProcessor {
+class FftProcessor
+{
 public:
     /**
      * @brief Describes one detected signal group in the power spectrum.
      */
-    struct Signal {
-        int   start_bin;    ///< First bin of the run (fftshift coordinates).
-        int   end_bin;      ///< Last bin of the run, inclusive (fftshift coordinates).
-        float peak_db;      ///< Peak power in the run (dBFS).
-        float mean_db;      ///< Mean power of the run (dBFS).
-        float center_bin;   ///< Sub-bin interpolated peak position (fftshift coordinates).
+    struct Signal
+    {
+        int   start_bin;   ///< First bin of the run (fftshift coordinates).
+        int   end_bin;     ///< Last bin of the run, inclusive (fftshift coordinates).
+        float peak_db;     ///< Peak power in the run (dBFS).
+        float mean_db;     ///< Mean power of the run (dBFS).
+        float center_bin;  ///< Sub-bin interpolated peak position (fftshift coordinates).
     };
 
     /**
@@ -106,14 +111,13 @@ public:
      *                          persistent interference.  Pass nullptr to disable.
      * @return Detected signal groups, sorted by peak_db descending.
      */
-    std::vector<Signal> detectFromSpectrum(
-        float                    threshold_db,
-        float                    usable_fraction,
-        au::QuantityD<au::Hertz> sample_rate,
-        au::QuantityD<au::Hertz> min_signal_bw_hz,
-        au::QuantityD<au::Hertz> dc_guard_hz  = au::hertz(0.0),
-        float                    min_papr_db  = 3.0f,
-        const std::vector<float>* hist_floor = nullptr);
+    std::vector<Signal> detectFromSpectrum(float                     threshold_db,
+                                           float                     usable_fraction,
+                                           au::QuantityD<au::Hertz>  sample_rate,
+                                           au::QuantityD<au::Hertz>  min_signal_bw_hz,
+                                           au::QuantityD<au::Hertz>  dc_guard_hz = au::hertz(0.0),
+                                           float                     min_papr_db = 3.0f,
+                                           const std::vector<float>* hist_floor  = nullptr);
 
     /**
      * @brief Convenience: computeSpectrum() + detectFromSpectrum() in one call.
@@ -126,17 +130,19 @@ public:
      * @param dc_guard_hz   DC guard zone (Hz).  0 = disabled.
      * @return Detected signal groups.
      */
-    std::vector<Signal> detect(
-        const std::complex<float>* samples,
-        int                      n_samples,
-        float                    threshold_db,
-        float                    usable_fraction,
-        au::QuantityD<au::Hertz> sample_rate,
-        au::QuantityD<au::Hertz> min_signal_bw_hz,
-        au::QuantityD<au::Hertz> dc_guard_hz = au::hertz(0.0));
+    std::vector<Signal> detect(const std::complex<float>* samples,
+                               int                        n_samples,
+                               float                      threshold_db,
+                               float                      usable_fraction,
+                               au::QuantityD<au::Hertz>   sample_rate,
+                               au::QuantityD<au::Hertz>   min_signal_bw_hz,
+                               au::QuantityD<au::Hertz>   dc_guard_hz = au::hertz(0.0));
 
     /// @brief Power spectrum in dBFS after the last computeSpectrum() call.
-    const std::vector<float>& powerDb() const { return power_db_; }
+    const std::vector<float>& powerDb() const
+    {
+        return power_db_;
+    }
 
     /**
      * @brief Convert an integer bin index to a frequency quantity (fftshift coordinates).
@@ -145,7 +151,7 @@ public:
      * @param center_hz   LO centre frequency.
      * @return Absolute frequency as an Au quantity.
      */
-    au::QuantityD<au::Hertz> binToHz(int   bin,
+    au::QuantityD<au::Hertz> binToHz(int                      bin,
                                      au::QuantityD<au::Hertz> sample_rate,
                                      au::QuantityD<au::Hertz> center_hz) const;
 
@@ -156,12 +162,15 @@ public:
      * @param center_hz   LO centre frequency.
      * @return Absolute frequency as an Au quantity.
      */
-    au::QuantityD<au::Hertz> binToHz(float bin,
+    au::QuantityD<au::Hertz> binToHz(float                    bin,
                                      au::QuantityD<au::Hertz> sample_rate,
                                      au::QuantityD<au::Hertz> center_hz) const;
 
     /// @brief FFT size this processor was constructed with.
-    int fft_size() const { return fft_size_; }
+    int fft_size() const
+    {
+        return fft_size_;
+    }
 
 private:
     int            fft_size_;
@@ -171,18 +180,18 @@ private:
     fftwf_complex* out_{nullptr};
     fftwf_plan     plan_{nullptr};
 
-    std::vector<float> window_;       ///< Blackman-Harris window coefficients.
-    float              power_norm_{1.f}; ///< 1/(Σw)²: full-scale tone → 0 dBFS.
-    std::vector<float> linear_acc_;   ///< Welch linear-power accumulator.
-    std::vector<float> power_db_;     ///< Averaged power in dBFS (fftshift layout).
-    std::vector<float> scratch_;      ///< Scratch buffer — no per-call allocation.
-    std::vector<float> psum_;         ///< CFAR prefix sum — pre-allocated.
+    std::vector<float> window_;           ///< Blackman-Harris window coefficients.
+    float              power_norm_{1.f};  ///< 1/(Σw)²: full-scale tone → 0 dBFS.
+    std::vector<float> linear_acc_;       ///< Welch linear-power accumulator.
+    std::vector<float> power_db_;         ///< Averaged power in dBFS (fftshift layout).
+    std::vector<float> scratch_;          ///< Scratch buffer — no per-call allocation.
+    std::vector<float> psum_;             ///< CFAR prefix sum — pre-allocated.
 
     void  accumFrame(const std::complex<float>* src);
     float estimateNoise(int start_bin, int end_bin);
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

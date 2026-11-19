@@ -38,14 +38,17 @@ Contact author for permission: https://github.com/OpenRFStack
  *
  * @see ThreatConfig, AlertStore, RfAlert
  */
-#include "RfAlert.hpp"
 #include "AlertStore.hpp"
-#include <au/units/hertz.hh>
+#include "RfAlert.hpp"
+
 #include <functional>
 #include <string>
 #include <vector>
 
-namespace acq {
+#include <au/units/hertz.hh>
+
+namespace acq
+{
 
 /**
  * @class GpsMonitor
@@ -53,7 +56,8 @@ namespace acq {
  *
  * Injecting the IQ-fetch callback makes this unit-testable without a real SDR.
  */
-class GpsMonitor {
+class GpsMonitor
+{
 public:
     /**
      * @brief Callback type used to request a short IQ capture at a given frequency.
@@ -64,21 +68,22 @@ public:
      * @return Interleaved float32 I,Q samples (even=I, odd=Q), empty on failure.
      */
     using NarrowbandCb = std::function<std::vector<float>(
-        au::QuantityD<au::Hertz> freq,
-        au::QuantityD<au::Hertz> sr,
-        double duration_s)>;
+        au::QuantityD<au::Hertz> freq, au::QuantityD<au::Hertz> sr, double duration_s)>;
 
     /**
      * @brief Runtime configuration for the GPS monitor.
      */
-    struct Config {
-        double jammer_threshold_db{20.0};    ///< Power delta (dB above EMA baseline) to declare jamming.
-        double spoof_detectable_dbm{-110.0}; ///< Any GPS-band signal above this level is a spoofing suspect.
-                                              ///<   Real GPS is always ~−130 dBm (buried in noise).
-        double baseline_alpha{0.05};          ///< EMA coefficient for baseline noise-floor tracker.
-                                              ///<   Smaller values = slower adaptation.  Range (0, 1).
-        double check_interval_s{30.0};       ///< Minimum seconds between successive checks per GPS band.
-        std::string scanner_id;               ///< Identifier embedded in generated RfAlert records.
+    struct Config
+    {
+        double jammer_threshold_db{
+            20.0};  ///< Power delta (dB above EMA baseline) to declare jamming.
+        double spoof_detectable_dbm{
+            -110.0};  ///< Any GPS-band signal above this level is a spoofing suspect.
+                      ///<   Real GPS is always ~−130 dBm (buried in noise).
+        double baseline_alpha{0.05};    ///< EMA coefficient for baseline noise-floor tracker.
+                                        ///<   Smaller values = slower adaptation.  Range (0, 1).
+        double check_interval_s{30.0};  ///< Minimum seconds between successive checks per GPS band.
+        std::string scanner_id;         ///< Identifier embedded in generated RfAlert records.
     };
 
     /**
@@ -102,11 +107,12 @@ private:
     /**
      * @brief State machine for a single GPS frequency band.
      */
-    struct BandState {
-        double      freq_hz;          ///< Nominal carrier frequency (Hz).
-        const char* name;             ///< Human-readable band name ("GPS-L1", etc.).
-        float       baseline_db{-120.0f}; ///< EMA noise-floor estimate (dBFS).
-        double      last_check_s{-9999.0};///< Monotonic time of last IQ capture.
+    struct BandState
+    {
+        double      freq_hz;                ///< Nominal carrier frequency (Hz).
+        const char* name;                   ///< Human-readable band name ("GPS-L1", etc.).
+        float       baseline_db{-120.0f};   ///< EMA noise-floor estimate (dBFS).
+        double      last_check_s{-9999.0};  ///< Monotonic time of last IQ capture.
     };
 
     /**
@@ -130,13 +136,13 @@ private:
      */
     float computeBandwidthMHz(const std::vector<float>& iq, double sr_hz) const;
 
-    Config                 cfg_;     ///< Runtime configuration.
-    NarrowbandCb           fetch_iq_;///< IQ-fetch injection point.
-    AlertStore&            store_;   ///< Alert persistence backend.
-    std::vector<BandState> bands_;   ///< Per-band state (L1, L2, L5).
+    Config                 cfg_;       ///< Runtime configuration.
+    NarrowbandCb           fetch_iq_;  ///< IQ-fetch injection point.
+    AlertStore&            store_;     ///< Alert persistence backend.
+    std::vector<BandState> bands_;     ///< Per-band state (L1, L2, L5).
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

@@ -22,12 +22,14 @@ Contact author for permission: https://github.com/OpenRFStack
  * - **SoapyIqSource** (unit tests only) — drives a SoapySDR device directly,
  *   bypassing AMQP entirely.
  */
-#include <au/units/hertz.hh>
 #include <complex>
 #include <cstdint>
 #include <vector>
 
-namespace acq {
+#include <au/units/hertz.hh>
+
+namespace acq
+{
 
 /**
  * @brief One dwell's worth of IQ data from a single frequency position.
@@ -35,8 +37,9 @@ namespace acq {
  * ch_samples[c] holds all samples for channel @p c.
  * For a single-channel PlutoSDR, ch_samples has one element.
  */
-struct Dwell {
-    au::QuantityD<au::Hertz> center_hz{au::hertz(0.0)}; ///< LO centre frequency for this dwell.
+struct Dwell
+{
+    au::QuantityD<au::Hertz> center_hz{au::hertz(0.0)};  ///< LO centre frequency for this dwell.
     /// Sample rate of the delivered samples (packet header, ICD §10.1).
     /// 0 = unknown (sources without a header) — consumers fall back to the
     /// configured rate.
@@ -52,9 +55,10 @@ struct Dwell {
  * Non-copyable. Implementations must be thread-safe with respect to stop()
  * being called from a different thread than next().
  */
-class IqSource {
+class IqSource
+{
 public:
-    virtual ~IqSource() = default;
+    virtual ~IqSource()                  = default;
     IqSource(const IqSource&)            = delete;
     IqSource& operator=(const IqSource&) = delete;
 
@@ -92,7 +96,7 @@ protected:
     IqSource() = default;
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

@@ -24,20 +24,23 @@ Contact author for permission: https://github.com/OpenRFStack
  * into the `iq_snapshot_b64` field.
  */
 #include "Types.hpp"
+
+#include <proton/connection.hpp>
+#include <proton/connection_options.hpp>
 #include <proton/container.hpp>
 #include <proton/message.hpp>
 #include <proton/messaging_handler.hpp>
-#include <proton/connection.hpp>
-#include <proton/connection_options.hpp>
 #include <proton/reconnect_options.hpp>
 #include <proton/sender.hpp>
 #include <proton/transport.hpp>
 #include <proton/work_queue.hpp>
-#include <atomic>
-#include <thread>
-#include <string>
 
-namespace acq {
+#include <atomic>
+#include <string>
+#include <thread>
+
+namespace acq
+{
 
 /**
  * @brief Publishes Detection objects as AMQP messages to an rf.detections topic.
@@ -45,7 +48,8 @@ namespace acq {
  * Non-copyable.  Call start() before publish(), stop() before destruction.
  * publish() is safe to call from any thread after start() returns.
  */
-class AmqpPublisher : public proton::messaging_handler {
+class AmqpPublisher : public proton::messaging_handler
+{
 public:
     /**
      * @brief Construct the publisher.
@@ -55,8 +59,11 @@ public:
      * @param topic      Destination topic address (e.g. "rf.detections").
      * @param scanner_id Scanner identifier embedded in every message.
      */
-    AmqpPublisher(std::string url, std::string username, std::string password,
-                  std::string topic, std::string scanner_id);
+    AmqpPublisher(std::string url,
+                  std::string username,
+                  std::string password,
+                  std::string topic,
+                  std::string scanner_id);
     ~AmqpPublisher();
 
     AmqpPublisher(const AmqpPublisher&)            = delete;
@@ -87,21 +94,21 @@ public:
     /// @endcond
 
 private:
-    std::string         url_;
-    std::string         username_;
-    std::string         password_;
-    std::string         topic_;
-    std::string         scanner_id_;
+    std::string                      url_;
+    std::string                      username_;
+    std::string                      password_;
+    std::string                      topic_;
+    std::string                      scanner_id_;
     proton::sender                   sender_;
     std::atomic<proton::work_queue*> work_queue_{nullptr};
     proton::container*               container_{nullptr};
-    std::thread         thread_;
-    std::atomic<bool>   stopping_{false};
+    std::thread                      thread_;
+    std::atomic<bool>                stopping_{false};
 
     proton::message makeMessage(const Detection& d) const;
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================

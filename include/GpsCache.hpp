@@ -21,11 +21,6 @@ Do not use for commercial, organizational, or military purposes.
  *
  * Returns std::nullopt until GpsApp publishes its first fix.
  */
-#include <atomic>
-#include <mutex>
-#include <optional>
-#include <string>
-#include <thread>
 #include <proton/connection.hpp>
 #include <proton/container.hpp>
 #include <proton/delivery.hpp>
@@ -33,7 +28,14 @@ Do not use for commercial, organizational, or military purposes.
 #include <proton/messaging_handler.hpp>
 #include <proton/transport.hpp>
 
-namespace acq {
+#include <atomic>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+
+namespace acq
+{
 
 /**
  * @brief GPS fix snapshot from GpsApp.
@@ -41,15 +43,19 @@ namespace acq {
  * Populated from a @c gps.location AMQP message published by GpsApp.
  * All fields are valid when GpsApp has a 3-D fix (mode ≥ 2).
  */
-struct GpsFix {
-    double lat{0.0};   ///< Latitude in decimal degrees (WGS-84).
-    double lon{0.0};   ///< Longitude in decimal degrees (WGS-84).
-    double alt_m{0.0}; ///< Altitude above mean sea level (metres).
+struct GpsFix
+{
+    double lat{0.0};    ///< Latitude in decimal degrees (WGS-84).
+    double lon{0.0};    ///< Longitude in decimal degrees (WGS-84).
+    double alt_m{0.0};  ///< Altitude above mean sea level (metres).
 };
 
-class GpsCache : public proton::messaging_handler {
+class GpsCache : public proton::messaging_handler
+{
 public:
-    GpsCache(std::string url, std::string username, std::string password,
+    GpsCache(std::string url,
+             std::string username,
+             std::string password,
              std::string topic = "gps.location");
     ~GpsCache();
 
@@ -88,7 +94,7 @@ private:
     std::atomic<bool>     stopping_{false};
 };
 
-} // namespace acq
+}  // namespace acq
 
 /*
 ========================================================================
