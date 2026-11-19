@@ -37,6 +37,10 @@ namespace acq {
  */
 struct Dwell {
     au::QuantityD<au::Hertz> center_hz{au::hertz(0.0)}; ///< LO centre frequency for this dwell.
+    /// Sample rate of the delivered samples (packet header, ICD §10.1).
+    /// 0 = unknown (sources without a header) — consumers fall back to the
+    /// configured rate.
+    double sample_rate_hz = 0.0;
     /// Samples per channel: ch_samples[channel][sample_index].
     /// Each sample is a CF32 complex<float> (I + jQ).
     std::vector<std::vector<std::complex<float>>> ch_samples;

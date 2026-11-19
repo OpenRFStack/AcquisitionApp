@@ -11,6 +11,7 @@ Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
 #include "TaskManagerIqSource.hpp"
+#include "LocalAddress.hpp"
 #include <au/units/hertz.hh>
 #include <sdr/Types.hpp>
 #include <nlohmann/json.hpp>
@@ -37,6 +38,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <cmath>
 #include <chrono>
 #include <atomic>
 #include <mutex>
@@ -249,6 +251,7 @@ TaskManagerIqSource::TaskManagerIqSource(const SweepConfig& cfg,
                                           bool device_required)
     : cfg_(cfg), preferred_device_(std::move(preferred_device)),
       device_required_(device_required),
+      assembler_(cfg.device.rx_channels, cfg.sweep.dwell_samples),
       resume_hz_(cfg.sweep.start_hz) {
     pkt_buf_.resize(65536);
     resetAccum();
@@ -263,11 +266,13 @@ TaskManagerIqSource::TaskManagerIqSource(const SweepConfig& cfg,
 TaskManagerIqSource::~TaskManagerIqSource() { close(); }
 
 void TaskManagerIqSource::resetAccum() {
-    ch_accum_.assign((size_t)cfg_.device.rx_channels, {});
-    // Pre-reserve so packet inserts never reallocate mid-dwell.
-    for (auto& buf : ch_accum_)
-        buf.reserve(static_cast<size_t>(cfg_.sweep.dwell_samples));
-    current_center_hz_ = au::hertz(0.0);
+    const auto& st = assembler_.stats();
+    if (st.gaps || st.overflows || st.late_packets || st.malformed)
+        spdlog::info("[TaskMgrSrc] stream stats: {} pkts, {} gaps ({} pkts lost), {} overflows, "
+                     "{} late, {} malformed, {} samples discarded to avoid splicing",
+                     st.packets, st.gaps, st.lost_packets, st.overflows, st.late_packets,
+                     st.malformed, st.discarded_samples);
+    assembler_.reset();
 }
 
 void TaskManagerIqSource::bindUdp(uint16_t port) {
@@ -311,26 +316,24 @@ std::string TaskManagerIqSource::buildScanRequest(const std::string& req_id) con
     const double resume   = resume_hz_.in(au::hertz);
 
     const double step_hz = sr_hz * cfg_.sweep.usable_bw_fraction;
-    int dwell_ms = std::max(1, static_cast<int>(cfg_.sweep.dwell_samples * 1000.0 / sr_hz));
+    const int dwell_ms = scanDwellMs(cfg_.sweep.dwell_samples, sr_hz);
 
-    // Build entries starting from resume_hz so a re-submission after preemption
-    // continues the sweep rather than restarting at start_hz. The second loop
-    // wraps back through start_hz → resume_hz, ensuring every frequency is
-    // covered exactly once per task regardless of where we were interrupted.
-    auto makeEntry = [&](int& step_i, double pos) {
-        return json{
+    // Entries on a fixed grid, starting at the entry that contains resume_hz
+    // and wrapping, so a re-submission after preemption continues the sweep
+    // and every frequency is covered exactly once per task (ACQ-06). A span
+    // narrower than one step (P25 voice channel) gets one centred entry.
+    const auto centers = scanEntryCenters(start_hz, stop_hz, step_hz, resume);
+    json entries = json::array();
+    int step_i = 0;
+    for (double c : centers)
+        entries.push_back(json{
             {"step",            step_i++},
-            {"center_freq_hz",  pos + step_hz / 2.0},
+            {"center_freq_hz",  c},
             {"bandwidth_hz",    bw_hz},
             {"sample_rate_sps", sr_hz},
             {"dwell_ms",        dwell_ms}
-        };
-    };
-
-    json entries = json::array();
-    int step_i = 0;
-    for (double pos = resume; pos + step_hz / 2.0 <= stop_hz;  pos += step_hz) entries.push_back(makeEntry(step_i, pos));
-    for (double pos = start_hz; pos + step_hz / 2.0 <= resume; pos += step_hz) entries.push_back(makeEntry(step_i, pos));
+        });
+    last_entry_hz_ = centers.back();
 
     std::vector<double> gains(cfg_.device.rx_channels, cfg_.device.rx_gain_db);
 
@@ -339,8 +342,11 @@ std::string TaskManagerIqSource::buildScanRequest(const std::string& req_id) con
 
     // Build the streaming object; include the pre-bound port so the controller
     // can stream to it immediately without waiting for a handshake.
+    // A wildcard bind address is not a destination. It used to become
+    // 127.0.0.1, which only works when SdrResourceManager runs on this host;
+    // use the local address of the route towards the broker instead (ACQ-07).
     std::string dest_ip = (cfg_.receiver.local_ip == "0.0.0.0")
-                          ? "127.0.0.1" : cfg_.receiver.local_ip;
+                          ? localAddressTowards(cfg_.amqp.url) : cfg_.receiver.local_ip;
     json streaming_obj = {{"dest_ip", dest_ip}};
     if (prebound_port_ > 0)
         streaming_obj["dest_ports"] = json::array({static_cast<int>(prebound_port_)});
@@ -506,6 +512,7 @@ void TaskManagerIqSource::open() {
     }
     resetAccum();
     first_task_packet_ = true;
+    sweep_done_ = false;
     running_ = true;
 }
 
@@ -535,6 +542,7 @@ bool TaskManagerIqSource::next(Dwell& d) {
     static constexpr int INITIAL_TIMEOUT_MS = 30000;
     static constexpr int STREAM_TIMEOUT_MS  =  5000;
     int no_data_ms     = 0;
+    if (sweep_done_) return false;
 
     while (running_) {
         ssize_t n = ::recvfrom(udp_fd_, pkt_buf_.data(), pkt_buf_.size(), 0, nullptr, nullptr);
@@ -566,78 +574,31 @@ bool TaskManagerIqSource::next(Dwell& d) {
         }
         first_task_packet_ = false;
         no_data_ms   = 0;
-        // Advance resume_hz_ on every packet so it always reflects the last
-        // frequency we actually received data at. When next() returns false
-        // (preemption or sweep complete) the next open() will resume from here.
-        if (static_cast<size_t>(n) >= sizeof(IqPacketHeader)) {
-            const auto& peek = *reinterpret_cast<const IqPacketHeader*>(pkt_buf_.data());
-            if (peek.magic == IQ_MAGIC) {
-                const double step_hz = cfg_.device.sample_rate.in(au::hertz)
-                                       * cfg_.sweep.usable_bw_fraction;
-                auto next_hz = au::hertz(static_cast<double>(peek.center_freq_hz) + step_hz);
-                resume_hz_ = (next_hz >= cfg_.sweep.stop_hz)
-                             ? cfg_.sweep.start_hz : next_hz;
-            }
-        }
-
-        if (static_cast<size_t>(n) < sizeof(IqPacketHeader)) continue;
-
-        const auto& hdr = *reinterpret_cast<const IqPacketHeader*>(pkt_buf_.data());
-        if (hdr.magic != IQ_MAGIC) continue;
-
-        int n_samp = hdr.num_samples;
-        int ch     = hdr.channel_index;
-
-        // Guard against malformed header fields before any arithmetic.
-        if (n_samp <= 0 || ch < 0) {
-            spdlog::warn("[TaskMgrSrc] bad header: n_samp={} ch={}", n_samp, ch);
-            continue;
-        }
-
-        // Validate declared sample count against actual received bytes to guard
-        // against truncated or malformed packets corrupting the accumulator.
-        size_t expected = sizeof(IqPacketHeader) + (size_t)n_samp * sizeof(std::complex<float>);
-        if (static_cast<size_t>(n) < expected) {
-            spdlog::warn("[TaskMgrSrc] truncated packet: {} bytes, expected {} for {} samples",
-                         n, expected, n_samp);
-            continue;
-        }
-
-        const auto* samples = reinterpret_cast<const std::complex<float>*>(
-            pkt_buf_.data() + sizeof(IqPacketHeader));
-
-        // IQ_FLAG_DWELL_CHANGE: first packet of a new dwell position.
-        // Return the accumulated dwell (if any), then reset.
-        if ((hdr.flags & FLAG_DWELL_CHANGE) && current_center_hz_ != au::hertz(0.0)) {
-            bool has_data = false;
-            for (auto& buf : ch_accum_)
-                if (!buf.empty()) { has_data = true; break; }
-
-            if (has_data) {
-                d.center_hz  = current_center_hz_;
-                d.ch_samples = std::move(ch_accum_);
-                resetAccum();
-                current_center_hz_ = au::hertz(static_cast<double>(hdr.center_freq_hz));
-                // Buffer the new-dwell samples for next call
-                if (ch < (int)ch_accum_.size())
-                    ch_accum_[ch].insert(ch_accum_[ch].end(), samples, samples + n_samp);
-                return true;
-            }
-        }
-
-        current_center_hz_ = au::hertz(static_cast<double>(hdr.center_freq_hz));
-        if (ch < (int)ch_accum_.size())
-            ch_accum_[ch].insert(ch_accum_[ch].end(), samples, samples + n_samp);
-
-        // Return a complete dwell once we have enough samples on channel 0
-        if ((int)ch_accum_[0].size() >= cfg_.sweep.dwell_samples) {
-            d.center_hz  = current_center_hz_;
-            d.ch_samples = std::move(ch_accum_);
-            resetAccum();
+        // Header validation, dwell boundaries, sequence-gap / overflow
+        // handling and per-channel accumulation (DwellAssembler.hpp).
+        if (assembler_.push(pkt_buf_.data(), static_cast<size_t>(n), d)) {
+            // Resume after the last *completed* dwell, on the entry grid.
+            const double step_hz = cfg_.device.sample_rate.in(au::hertz)
+                                   * cfg_.sweep.usable_bw_fraction;
+            const double c = d.center_hz.in(au::hertz);
+            resume_hz_ = au::hertz(resumeAfterDwell(cfg_.sweep.start_hz.in(au::hertz),
+                                                    cfg_.sweep.stop_hz.in(au::hertz),
+                                                    step_hz, c));
+            // The task's last entry is in: the sweep is over. Return false on
+            // the next call instead of idling STREAM_TIMEOUT_MS (5 s) on a
+            // silent socket — that dead time used to follow every sweep.
+            if (std::abs(c - last_entry_hz_) < 0.25 * step_hz + 1.0) sweep_done_ = true;
             return true;
         }
     }
     return false;
+}
+
+void TaskManagerIqSource::setSweepBand(au::QuantityD<au::Hertz> start_hz,
+                                       au::QuantityD<au::Hertz> stop_hz) {
+    cfg_.sweep.start_hz = start_hz;
+    cfg_.sweep.stop_hz  = stop_hz;
+    resume_hz_          = start_hz;
 }
 
 } // namespace acq

@@ -11,6 +11,7 @@ Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
 #pragma once
+#include <cmath>
 #include <vector>
 /**
  * @file SweepConfig.hpp
@@ -163,6 +164,67 @@ struct BandConfig {
     au::QuantityD<au::Hertz> start_hz{au::hertz(0.0)}; ///< Band start frequency.
     au::QuantityD<au::Hertz> stop_hz{au::hertz(0.0)};  ///< Band stop frequency.
 };
+
+/// SdrResourceManager rejects scan entries shorter than this (doAcceptScan:
+/// dwell_ms < 5 → SCAN_ENTRY_INVALID).
+inline constexpr int kControllerMinDwellMs = 5;
+
+/// dwell_ms for one scan entry: long enough to deliver @p dwell_samples at
+/// @p sample_rate_sps, never below the controller's minimum. Truncating to
+/// whole milliseconds used to give 1 ms for the shipped scanner.xml (4096
+/// samples at 10 MS/s = 0.41 ms) and every scan request was rejected.
+inline int scanDwellMs(int dwell_samples, double sample_rate_sps) {
+    if (sample_rate_sps <= 0.0) return kControllerMinDwellMs;
+    const double ms = std::ceil(dwell_samples * 1000.0 / sample_rate_sps);
+    return ms < kControllerMinDwellMs ? kControllerMinDwellMs : (int)ms;
+}
+
+/**
+ * @brief Centre frequencies of one SCAN task's entries (ACQ-06).
+ *
+ * Entries sit on a fixed grid: centre_k = start + (k + ½)·step for every k
+ * with centre_k ≤ stop. The list starts at the grid entry containing
+ * @p resume_hz and wraps, so a re-submission after preemption continues the
+ * sweep and every grid frequency appears exactly once. The grid never moves
+ * — the per-frequency noise-floor and persistence state is keyed by these
+ * centres. A span narrower than one step (e.g. a 12.5 kHz P25 voice channel)
+ * yields one entry at the span centre; it used to yield none, and the
+ * controller rejects an empty scan.
+ */
+inline std::vector<double> scanEntryCenters(double start_hz, double stop_hz,
+                                            double step_hz, double resume_hz) {
+    std::vector<double> grid;
+    if (step_hz > 0.0)
+        for (int k = 0; start_hz + (k + 0.5) * step_hz <= stop_hz; ++k)
+            grid.push_back(start_hz + (k + 0.5) * step_hz);
+    if (grid.empty()) return {0.5 * (start_hz + stop_hz)};
+    int first = 0;
+    if (resume_hz > start_hz) {
+        first = (int)std::floor((resume_hz - start_hz) / step_hz + 1e-9);
+        if (first >= (int)grid.size()) first = 0;
+    }
+    std::vector<double> out;
+    out.reserve(grid.size());
+    for (size_t i = 0; i < grid.size(); ++i) out.push_back(grid[(first + i) % grid.size()]);
+    return out;
+}
+
+/**
+ * @brief Where the next SCAN task resumes after the dwell at @p completed_hz
+ *        finished: the start of the following grid entry (wrapping to start).
+ *
+ * The old rule, `packet centre + step` on every packet, landed half a step
+ * off the grid, so each preemption shifted the whole grid (unbounded growth of
+ * the per-frequency maps, lost persistence history) and skipped the entry
+ * that was cut short.
+ */
+inline double resumeAfterDwell(double start_hz, double stop_hz, double step_hz,
+                               double completed_hz) {
+    if (step_hz <= 0.0) return start_hz;
+    const int k = (int)std::floor((completed_hz - start_hz) / step_hz);
+    const double next = start_hz + (k + 1) * step_hz;
+    return (next + 0.5 * step_hz > stop_hz) ? start_hz : next;
+}
 
 struct SweepConfig {
     std::string    scanner_id{"scanner-0"}; ///< Identifies this scanner in AMQP messages.

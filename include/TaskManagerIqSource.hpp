@@ -43,6 +43,7 @@ Contact author for permission: https://github.com/OpenRFStack
  * task acceptance and the first IQ packet arriving.
  */
 #include "IqSource.hpp"
+#include "DwellAssembler.hpp"
 #include "SweepConfig.hpp"
 #include <au/units/hertz.hh>
 #include <au/units/seconds.hh>
@@ -112,6 +113,15 @@ public:
     /// @brief Number of RX channels requested from the controller.
     int  numChannels() const override { return cfg_.device.rx_channels; }
 
+    /**
+     * @brief Retarget the next SCAN task to [start_hz, stop_hz].
+     *
+     * The P25 grant handler built a narrow SweepConfig for the voice channel
+     * but only handed it to the SpectrumScanner; the source kept requesting
+     * its own (full) band. Call between tasks (not while next() runs).
+     */
+    void setSweepBand(au::QuantityD<au::Hertz> start_hz, au::QuantityD<au::Hertz> stop_hz);
+
 private:
     SweepConfig       cfg_;
     std::string       preferred_device_;        ///< Requested device ID; empty = any free device.
@@ -120,10 +130,8 @@ private:
     std::string       task_id_;                 ///< Controller-assigned task UUID for TASK_STOP.
     std::atomic<bool> running_{false};          ///< Set false by stop() to break the next() loop.
 
-    std::vector<std::vector<std::complex<float>>> ch_accum_; ///< Per-channel IQ sample accumulators.
-
-    /// LO centre frequency of the dwell currently being accumulated.
-    au::QuantityD<au::Hertz> current_center_hz_{au::hertz(0.0)};
+    /// Packet → dwell assembly (gap/overflow aware); see DwellAssembler.hpp.
+    DwellAssembler    assembler_;
 
     /// True until the first packet of the current TASK (not dwell) arrives.
     /// Must be a member, not a local in next(): next() returns once per
@@ -137,12 +145,17 @@ private:
     bool first_task_packet_{true};
 
     /// Start frequency for the next SCAN task submission.
-    /// Updated on every received packet to track sweep position. When the
+    /// Updated after every completed dwell, aligned to the entry grid. When the
     /// task ends (sweep complete or preemption), buildScanRequest() starts
     /// the next entry list from here, wrapping start_hz → resume_hz after
     /// stop_hz, so every frequency is visited once per task regardless of
     /// where the previous task was interrupted.
     au::QuantityD<au::Hertz> resume_hz_{au::hertz(0.0)};
+
+    /// Centre of the current task's last scan entry (set by buildScanRequest).
+    mutable double last_entry_hz_{0.0};
+    /// The last entry's dwell has been delivered — next() returns false at once.
+    bool sweep_done_{false};
 
     std::vector<uint8_t> pkt_buf_;             ///< Pre-allocated 64 KB UDP receive buffer.
 

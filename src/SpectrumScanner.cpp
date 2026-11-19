@@ -83,10 +83,15 @@ void SpectrumScanner::sweepLoop() {
 
             int n_ch = std::min(static_cast<int>(dwell.ch_samples.size()),
                                 static_cast<int>(processors_.size()));
+            // Bin → Hz uses the rate the samples were delivered at (packet
+            // header), not the configured one (ACQ-05): a fixed-rate or
+            // DDC-decimated stream otherwise mislabels every detection.
+            const auto sr = dwell.sample_rate_hz > 0.0 ? au::hertz(dwell.sample_rate_hz)
+                                                      : cfg_.device.sample_rate;
 
             if (n_ch == 1) {
                 if (dwell.ch_samples[0].size() >= (size_t)cfg_.sweep.fft_size) {
-                    for (auto& d : processDwell(0, dwell.center_hz, dwell.ch_samples[0]))
+                    for (auto& d : processDwell(0, dwell.center_hz, sr, dwell.ch_samples[0]))
                         cb_(d);
                 }
             } else {
@@ -96,8 +101,8 @@ void SpectrumScanner::sweepLoop() {
                 for (int ch = 0; ch < n_ch; ++ch) {
                     if (dwell.ch_samples[ch].size() < (size_t)cfg_.sweep.fft_size) continue;
                     futs.push_back(std::async(std::launch::async,
-                        [this, ch, &dwell]{
-                            return processDwell(ch, dwell.center_hz, dwell.ch_samples[ch]);
+                        [this, ch, &dwell, sr]{
+                            return processDwell(ch, dwell.center_hz, sr, dwell.ch_samples[ch]);
                         }));
                 }
                 for (auto& f : futs)
@@ -122,6 +127,7 @@ void SpectrumScanner::sweepLoop() {
 
 std::vector<Detection> SpectrumScanner::processDwell(
     int ch, au::QuantityD<au::Hertz> center_hz,
+    au::QuantityD<au::Hertz> sample_rate,
     const std::vector<std::complex<float>>& samples)
 {
     auto& proc = *processors_[ch];
@@ -141,7 +147,7 @@ std::vector<Detection> SpectrumScanner::processDwell(
     auto sigs = proc.detectFromSpectrum(
         static_cast<float>(cfg_.sweep.threshold_db),
         static_cast<float>(cfg_.sweep.usable_bw_fraction),
-        cfg_.device.sample_rate,
+        sample_rate,
         cfg_.sweep.min_signal_bw_hz,
         cfg_.sweep.dc_guard_hz,
         cfg_.sweep.min_papr_db,
@@ -193,9 +199,9 @@ std::vector<Detection> SpectrumScanner::processDwell(
     out.reserve(sigs.size());
 
     for (const auto& s : sigs) {
-        auto f_lo_q = proc.binToHz(s.start_bin,  cfg_.device.sample_rate, center_hz);
-        auto f_hi_q = proc.binToHz(s.end_bin,    cfg_.device.sample_rate, center_hz);
-        auto fc_q   = proc.binToHz(s.center_bin, cfg_.device.sample_rate, center_hz);
+        auto f_lo_q = proc.binToHz(s.start_bin,  sample_rate, center_hz);
+        auto f_hi_q = proc.binToHz(s.end_bin,    sample_rate, center_hz);
+        auto fc_q   = proc.binToHz(s.center_bin, sample_rate, center_hz);
         uint64_t f_lo = static_cast<uint64_t>(std::llround(f_lo_q.in(au::hertz)));
         uint64_t f_hi = static_cast<uint64_t>(std::llround(f_hi_q.in(au::hertz)));
         uint64_t fc   = static_cast<uint64_t>(std::llround(fc_q.in(au::hertz)));
@@ -229,7 +235,7 @@ std::vector<Detection> SpectrumScanner::processDwell(
         d.channel                    = ch;
         d.snr_db                     = s.peak_db - s.mean_db;  // PAPR proxy
         d.iq_snapshot                = dwell_snapshot;          // shared_ptr, zero-copy
-        d.snapshot_sample_rate_sps   = cfg_.device.sample_rate;
+        d.snapshot_sample_rate_sps   = sample_rate;
         out.push_back(d);
     }
 

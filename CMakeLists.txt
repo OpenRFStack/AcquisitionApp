@@ -37,6 +37,9 @@ FetchContent_Declare(Au
     GIT_TAG        0.5.1
     GIT_SHALLOW    TRUE
     EXCLUDE_FROM_ALL)
+# Au registers its own gtest targets with CTest; they are never built here,
+# so `ctest` reported 30+ *_NOT_BUILT failures. Keep Au's tests out of our suite.
+set(AU_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(Au)
 
 # ── nlohmann/json ─────────────────────────────────────────────────────────────
@@ -125,7 +128,23 @@ endif()
 # pkg-config names vary: Ubuntu="libqpid-proton-cpp", CentOS="qpid-proton-cpp"
 # Ubuntu 24.04's libqpid-proton-cpp.pc has broken transitive deps; fall back
 # to find_library/find_path if pkg-config fails.
-pkg_check_modules(PROTON QUIET IMPORTED_TARGET qpid-proton-cpp)
+#
+# Prefer the CMake package config (same order as DfApp/DemodApp/AnalysisApp).
+# Debian 13's libqpid-proton-cpp.pc computes prefix=${pcfiledir}/../.., which
+# under multiarch resolves to the non-existent /usr/lib/include; as an
+# IMPORTED_TARGET that is a hard configure error. The rest of this file links
+# PkgConfig::PROTON, so alias the config target to that name.
+find_package(ProtonCpp QUIET)
+if(ProtonCpp_FOUND AND TARGET Proton::cpp)
+    add_library(PkgConfig::PROTON INTERFACE IMPORTED)
+    set_target_properties(PkgConfig::PROTON PROPERTIES
+        INTERFACE_LINK_LIBRARIES Proton::cpp)
+    set(PROTON_FOUND 1)
+    message(STATUS "[AcquisitionApp] qpid-proton-cpp found via CMake config (Proton::cpp)")
+endif()
+if(NOT PROTON_FOUND)
+    pkg_check_modules(PROTON QUIET IMPORTED_TARGET qpid-proton-cpp)
+endif()
 if(NOT PROTON_FOUND)
     pkg_check_modules(PROTON QUIET IMPORTED_TARGET libqpid-proton-cpp)
 endif()

@@ -42,6 +42,8 @@ add_executable(acq_tests
     unit/test_threat_detection.cpp
     unit/test_multi_device.cpp
     unit/test_gps_cache.cpp
+    unit/test_dwell_assembler.cpp
+    unit/test_audit_acq.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/FftProcessor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/SweepConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/SpectrumScanner.cpp
@@ -59,6 +61,7 @@ target_include_directories(acq_tests PRIVATE
 
 target_link_libraries(acq_tests PRIVATE
     GTest::gtest_main
+    sdr_task_api            # IqPacketHeader / ICD constants (DwellAssembler tests)
     nlohmann_json::nlohmann_json
     Au::au
     SoapySDR

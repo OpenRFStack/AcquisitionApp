@@ -116,6 +116,7 @@ private:
      * @return Detections that passed the persistence filter.
      */
     std::vector<Detection> processDwell(int ch, au::QuantityD<au::Hertz> center_hz,
+                                         au::QuantityD<au::Hertz> sample_rate,
                                          const std::vector<std::complex<float>>& samples);
 };
 

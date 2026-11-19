@@ -300,6 +300,9 @@ int main(int argc, char* argv[]) {
                 // The source's sweepLoop will fire on_detection for each signal found.
                 // We pass through on_detection unchanged — detections appear on
                 // rf.detections tagged with the modified scanner_id (tg<N>).
+                // The source builds the SCAN request from its own config: point
+                // it at the voice channel (it used to re-sweep the full band).
+                p25_src->setSweepBand(vcfg.sweep.start_hz, vcfg.sweep.stop_hz);
                 acq::SpectrumScanner voice_scanner(vcfg, p25_src, on_detection);
                 voice_scanner.start();
 

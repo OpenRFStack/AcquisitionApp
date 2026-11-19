@@ -49,6 +49,11 @@ FftProcessor::FftProcessor(int fft_size, int cfar_guard, int cfar_ref)
                    + 0.14128f * (float)std::cos(2.0 * x)
                    - 0.01168f * (float)std::cos(3.0 * x);
     }
+    // Coherent gain Σw: dividing |X|² by (Σw)² reads a full-scale tone as
+    // 0 dBFS. N² (used before) left every level 20·log10(Σw/N) ≈ −8.9 dB low.
+    double wsum = 0.0;
+    for (float w : window_) wsum += w;
+    power_norm_ = (float)(1.0 / (wsum * wsum));
 
     linear_acc_.resize((size_t)fft_size, 0.f);
     power_db_.resize((size_t)fft_size,   0.f);
@@ -90,7 +95,7 @@ void FftProcessor::accumFrame(const std::complex<float>* src) {
 
     // fftshift + squared-magnitude accumulation.
     // Two contiguous loops (no modulo) for the best vectorizer hint.
-    const float norm = 1.f / (float)(fft_size_ * fft_size_);
+    const float norm = power_norm_;
     const int   half = fft_size_ / 2;
     const float* __restrict__ fo  = reinterpret_cast<const float*>(out_);
     float* __restrict__       acc = linear_acc_.data();

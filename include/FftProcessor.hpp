@@ -172,6 +172,7 @@ private:
     fftwf_plan     plan_{nullptr};
 
     std::vector<float> window_;       ///< Blackman-Harris window coefficients.
+    float              power_norm_{1.f}; ///< 1/(Σw)²: full-scale tone → 0 dBFS.
     std::vector<float> linear_acc_;   ///< Welch linear-power accumulator.
     std::vector<float> power_db_;     ///< Averaged power in dBFS (fftshift layout).
     std::vector<float> scratch_;      ///< Scratch buffer — no per-call allocation.
