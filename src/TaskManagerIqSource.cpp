@@ -223,6 +223,11 @@ public:
 
     void on_connection_open(proton::connection& conn) override
     {
+        // proton re-opens both links itself on a reconnect (the dynamic
+        // receiver gets a fresh address via on_receiver_open); opening them
+        // again here added a sender and a reply queue per broker restart.
+        if (conn.reconnected())
+            return;
         // Open request sender with ANYCAST so Artemis uses a proper queue.
         proton::sender_options sopts;
         sopts.target(proton::target_options().capabilities({proton::symbol("queue")}));

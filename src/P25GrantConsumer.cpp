@@ -64,6 +64,10 @@ public:
 
     void on_connection_open(proton::connection& conn) override
     {
+        // proton re-opens the receiver itself on a reconnect; opening another
+        // here delivered every grant twice after each broker restart.
+        if (conn.reconnected())
+            return;
         conn.open_receiver(
             owner_.topic_,
             proton::receiver_options().source(proton::source_options().address(owner_.topic_)));

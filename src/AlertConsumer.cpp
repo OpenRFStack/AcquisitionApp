@@ -129,6 +129,10 @@ void AlertConsumer::on_container_start(proton::container& c)
 
 void AlertConsumer::on_connection_open(proton::connection& c)
 {
+    // proton re-opens the receiver itself on a reconnect; opening another
+    // here delivered every alert twice after each broker restart.
+    if (c.reconnected())
+        return;
     c.open_receiver(topic_);
     spdlog::info("[AlertConsumer] subscribed → {}", topic_);
 }

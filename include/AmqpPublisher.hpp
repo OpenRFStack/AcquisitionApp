@@ -36,6 +36,8 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <proton/work_queue.hpp>
 
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -91,10 +93,21 @@ public:
     /// @brief JSON body of an RF_NOISE_MAP message (exposed for tests).
     static std::string noiseMapJson(const NoiseMap& m);
 
+    /// Messages held while the broker is unreachable or grants no credit
+    /// (~11 KB each with an IQ snapshot). Beyond this the oldest is dropped.
+    static constexpr size_t kDefaultMaxQueued = 1024;
+
+    /// Messages dropped because the outbox was full.
+    uint64_t dropped() const
+    {
+        return dropped_.load();
+    }
+
     /// @cond INTERNAL
     void on_container_start(proton::container&) override;
     void on_connection_open(proton::connection&) override;
     void on_sender_open(proton::sender&) override;
+    void on_sendable(proton::sender&) override;
     void on_transport_error(proton::transport&) override;
     void on_connection_error(proton::connection&) override;
     /// @endcond
@@ -110,7 +123,16 @@ private:
     proton::container*               container_{nullptr};
     std::thread                      thread_;
     std::atomic<bool>                stopping_{false};
+    std::atomic<uint64_t>            dropped_{0};
 
+    // Outbox: filled by publish() on any thread, drained on the container
+    // thread only as far as the link has credit, so proton never buffers
+    // more than the broker asked for.
+    std::mutex                  outbox_mu_;
+    std::deque<proton::message> outbox_;
+
+    void            enqueue(proton::message msg);
+    void            flush();
     proton::message makeMessage(const Detection& d) const;
 };
 

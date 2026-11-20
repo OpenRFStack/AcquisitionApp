@@ -86,6 +86,10 @@ void GpsCache::on_container_start(proton::container& c)
 
 void GpsCache::on_connection_open(proton::connection& conn)
 {
+    // proton re-opens the receiver itself on a reconnect; opening another
+    // here delivered every fix twice after each broker restart.
+    if (conn.reconnected())
+        return;
     conn.open_receiver(topic_);
     spdlog::debug("[GpsCache] subscribed to {}", topic_);
 }

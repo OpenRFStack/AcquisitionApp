@@ -64,6 +64,7 @@ void AmqpPublisher::stop()
             wq->add(
                 [this]
                 {
+                    flush();  // whatever the link has credit for goes out before the close
                     sender_.connection().close();
                 });
         else
@@ -81,18 +82,56 @@ void AmqpPublisher::stop()
     }
 }
 
+void AmqpPublisher::enqueue(proton::message msg)
+{
+    if (stopping_)
+        return;
+    {
+        std::lock_guard lk(outbox_mu_);
+        // Held until the link is up and has credit (ACQ-16): startup before
+        // the broker answers, a reconnect, or a consumer that stopped taking
+        // messages. Bounded, newest kept.
+        if (outbox_.size() >= kDefaultMaxQueued)
+        {
+            outbox_.pop_front();
+            const auto n = dropped_.fetch_add(1) + 1;
+            if (n == 1 || n % 1000 == 0)
+                spdlog::warn(
+                    "[AmqpPublisher] {}: broker not taking messages, {} dropped (oldest first)",
+                    topic_,
+                    n);
+        }
+        outbox_.push_back(std::move(msg));
+    }
+    if (auto* wq = work_queue_.load())
+        wq->add(
+            [this]
+            {
+                flush();
+            });
+}
+
+void AmqpPublisher::flush()
+{
+    if (!sender_ || !sender_.active())
+        return;
+    while (sender_.credit() > 0)
+    {
+        proton::message msg;
+        {
+            std::lock_guard lk(outbox_mu_);
+            if (outbox_.empty())
+                return;
+            msg = std::move(outbox_.front());
+            outbox_.pop_front();
+        }
+        sender_.send(msg);
+    }
+}
+
 void AmqpPublisher::publish(const Detection& d)
 {
-    auto* wq = work_queue_.load();
-    if (!wq || stopping_)
-        return;
-    proton::message msg = makeMessage(d);
-    wq->add(
-        [this, msg]() mutable
-        {
-            if (sender_)
-                sender_.send(msg);
-        });
+    enqueue(makeMessage(d));
 }
 
 std::string AmqpPublisher::noiseMapJson(const NoiseMap& m)
@@ -118,18 +157,10 @@ std::string AmqpPublisher::noiseMapJson(const NoiseMap& m)
 
 void AmqpPublisher::publish(const NoiseMap& m)
 {
-    auto* wq = work_queue_.load();
-    if (!wq || stopping_)
-        return;
     proton::message msg;
     msg.body(noiseMapJson(m));
     msg.content_type("application/json");
-    wq->add(
-        [this, msg]() mutable
-        {
-            if (sender_)
-                sender_.send(msg);
-        });
+    enqueue(std::move(msg));
 }
 
 void AmqpPublisher::on_container_start(proton::container& c)
@@ -158,7 +189,10 @@ void AmqpPublisher::on_container_start(proton::container& c)
 
 void AmqpPublisher::on_connection_open(proton::connection& conn)
 {
-    conn.open_sender(topic_);
+    // On a reconnect proton re-opens the existing sender itself; opening
+    // another here added one more link per broker restart.
+    if (!conn.reconnected())
+        conn.open_sender(topic_);
 }
 
 void AmqpPublisher::on_sender_open(proton::sender& s)
@@ -166,6 +200,12 @@ void AmqpPublisher::on_sender_open(proton::sender& s)
     sender_ = s;
     work_queue_.store(&s.work_queue());
     spdlog::info("[AmqpPublisher] connected → {}", topic_);
+    flush();
+}
+
+void AmqpPublisher::on_sendable(proton::sender&)
+{
+    flush();
 }
 
 void AmqpPublisher::on_transport_error(proton::transport& t)

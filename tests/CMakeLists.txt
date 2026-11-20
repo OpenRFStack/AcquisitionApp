@@ -75,8 +75,12 @@ target_link_libraries(acq_tests PRIVATE
 )
 
 # P25GrantConsumer.cpp (compiled into acq_tests above) uses qpid-proton-cpp.
+# AmqpPublisher is tested against an in-process loopback AMQP peer.
 if(PROTON_FOUND)
     target_link_libraries(acq_tests PRIVATE PkgConfig::PROTON)
+    target_sources(acq_tests PRIVATE
+        unit/test_amqp_publisher.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AmqpPublisher.cpp)
 endif()
 
 target_compile_definitions(acq_tests PRIVATE
