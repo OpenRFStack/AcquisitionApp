@@ -186,6 +186,7 @@ private:
     std::vector<float> power_db_;         ///< Averaged power in dBFS (fftshift layout).
     std::vector<float> scratch_;          ///< Scratch buffer — no per-call allocation.
     std::vector<float> psum_;             ///< CFAR prefix sum — pre-allocated.
+    std::vector<int>   pcnt_;             ///< CFAR prefix count of noise-like cells.
 
     void  accumFrame(const std::complex<float>* src);
     float estimateNoise(int start_bin, int end_bin);

@@ -20,8 +20,9 @@ Contact author for permission: https://github.com/OpenRFStack
  * invoking the DetectionCallback.
  *
  * ## Persistence filter
- * A candidate detection must appear at the same quantised frequency
- * (±PERSIST_FREQ_QUANT_HZ) in at least PERSIST_MIN_HITS consecutive sweeps.
+ * A candidate detection must appear within ±PERSIST_FREQ_QUANT_HZ of the
+ * same persistence entry in at least PERSIST_MIN_HITS sweeps (≤
+ * PERSIST_MAX_MISSES misses in between).
  * Signals with PAPR ≥ PERSIST_BYPASS_PAPR_DB (strong, obvious signals such
  * as FM broadcast or LTE) bypass persistence and emit on the first sweep.
  *
@@ -102,8 +103,8 @@ private:
     std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, PersistEntry>>>
         ch_persist_;
 
-    /// Frequencies quantised to this step before the persistence lookup.
-    /// Coarse enough to tolerate sub-bin interpolation jitter across sweeps.
+    /// A detection matches the nearest persistence entry within this distance.
+    /// Wide enough to tolerate sub-bin interpolation jitter across sweeps.
     static constexpr uint64_t PERSIST_FREQ_QUANT_HZ = 10'000;
     /// Minimum confirmed hits before a detection callback fires.
     static constexpr int PERSIST_MIN_HITS = 2;

@@ -63,6 +63,7 @@ FftProcessor::FftProcessor(int fft_size, int cfar_guard, int cfar_ref)
     power_db_.resize((size_t)fft_size, 0.f);
     scratch_.resize((size_t)fft_size, 0.f);
     psum_.resize((size_t)fft_size + 1, 0.f);  // pre-allocated CFAR prefix sum
+    pcnt_.resize((size_t)fft_size + 1, 0);
 }
 
 FftProcessor::~FftProcessor()
@@ -186,26 +187,39 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
 
     float global_noise = estimateNoise(start_bin, end_bin);
 
-    // ── O(N) prefix sum for CA-CFAR range queries (float, pre-allocated) ─────
-    const int N = end_bin - start_bin + 1;
-    // psum_ is sized fft_size_+1 in constructor — always large enough
-    float* ps = psum_.data();
-    ps[0]     = 0.f;
+    // ── Censored CA-CFAR (ACQ-11) ─────────────────────────────────────────
+    // Reference cells already `threshold_db` above the band's median floor
+    // are signal, not noise: they are left out of the local average. Inside
+    // an emission wider than guard + reference cells the plain average
+    // measured the emission against itself and nothing was detected. With
+    // too few noise-like cells left on both sides, the median floor is used.
+    const int   N      = end_bin - start_bin + 1;
+    const float censor = global_noise + threshold_db;
+    float*      ps     = psum_.data();
+    int*        pc     = pcnt_.data();
+    ps[0]              = 0.f;
+    pc[0]              = 0;
     for (int i = 0; i < N; ++i)
-        ps[i + 1] = ps[i] + power_db_[start_bin + i];
+    {
+        const float v   = power_db_[start_bin + i];
+        const bool  nse = v < censor;
+        ps[i + 1]       = ps[i] + (nse ? v : 0.f);
+        pc[i + 1]       = pc[i] + (nse ? 1 : 0);
+    }
 
-    // Mean of bins [a,b] relative to start_bin; NaN if empty after clamping.
-    auto ref_mean = [&](int a, int b) -> float
+    // {sum, count} of noise-like bins in [a,b] (relative to start_bin).
+    auto ref_cells = [&](int a, int b) -> std::pair<float, int>
     {
         a = std::max(a, 0);
         b = std::min(b, N - 1);
         if (a > b)
-            return std::numeric_limits<float>::quiet_NaN();
-        return (ps[b + 1] - ps[a]) / (float)(b - a + 1);
+            return {0.f, 0};
+        return {ps[b + 1] - ps[a], pc[b + 1] - pc[a]};
     };
 
     const int    G        = cfar_guard_;
     const int    R        = cfar_ref_;
+    const int    min_ref  = std::max(1, R / 4);  // noise-like cells needed for a local estimate
     const double bin_hz   = sample_rate_hz / fft_size_;
     const int    min_bins = std::max(1, (int)std::ceil(min_bw_hz / bin_hz));
 
@@ -214,7 +228,9 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
     int                 run_start    = -1;
     int                 peak_bin_abs = -1;
     float               peak = -1e30f, sum = 0.f;
-    int                 count = 0;
+    int                 count     = 0;
+    float               noise_sum = 0.f;               // local noise over the run (flatness gate)
+    double              lin_sum = 0.0, lin_mom = 0.0;  // run power centroid
 
     auto flush = [&](int run_end_abs)
     {
@@ -224,10 +240,21 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
         if (width >= min_bins)
         {
             float mean = sum / (float)count;
-            if (width < 2 || peak - mean >= min_papr_db)
+            // The flatness gate is for marginal bumps only: a flat-topped
+            // emission (OFDM, LTE, DVB, wideband noise-like modes) well above
+            // the floor has peak ≈ mean and used to be dropped (ACQ-11).
+            const float run_noise = noise_sum / (float)count;
+            const bool  marginal  = mean < run_noise + threshold_db + 3.f;
+            if (width < 2 || !marginal || peak - mean >= min_papr_db)
             {
                 float center_bin_f = (float)peak_bin_abs;
-                if (peak_bin_abs > start_bin && peak_bin_abs < end_bin)
+                // A wide run's peak is just its highest ripple — anywhere in
+                // a flat-topped emission (36 kHz off-centre on a 200 kHz one,
+                // so the frequency and the persistence key wandered): use the
+                // linear-power centroid. Narrow runs: parabolic peak (ACQ-12).
+                if (width > 5 && lin_sum > 0.0)
+                    center_bin_f = (float)(lin_mom / lin_sum);
+                else if (peak_bin_abs > start_bin && peak_bin_abs < end_bin)
                 {
                     float y0    = power_db_[peak_bin_abs - 1];
                     float y1    = power_db_[peak_bin_abs];
@@ -244,22 +271,21 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
         peak         = -1e30f;
         sum          = 0.f;
         count        = 0;
+        noise_sum    = 0.f;
+        lin_sum      = 0.0;
+        lin_mom      = 0.0;
     };
 
     for (int k = start_bin; k <= end_bin; ++k)
     {
-        int   i     = k - start_bin;
-        float left  = ref_mean(i - G - R, i - G - 1);
-        float right = ref_mean(i + G + 1, i + G + R);
+        int i               = k - start_bin;
+        const auto [ls, lc] = ref_cells(i - G - R, i - G - 1);
+        const auto [rs, rc] = ref_cells(i + G + 1, i + G + R);
         float local_noise;
-        if (std::isnan(left) && std::isnan(right))
-            local_noise = global_noise;
-        else if (std::isnan(left))
-            local_noise = right;
-        else if (std::isnan(right))
-            local_noise = left;
+        if (lc + rc >= min_ref)
+            local_noise = (ls + rs) / (float)(lc + rc);
         else
-            local_noise = (left + right) * 0.5f;
+            local_noise = global_noise;
 
         if (hist_floor && k < (int)hist_floor->size())
             local_noise = std::max(local_noise, (*hist_floor)[k]);
@@ -274,6 +300,10 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
                 peak_bin_abs = k;
             }
             sum += power_db_[k];
+            noise_sum += local_noise;
+            const double lin = std::pow(10.0, (double)power_db_[k] / 10.0);
+            lin_sum += lin;
+            lin_mom += lin * k;
             ++count;
         }
         else

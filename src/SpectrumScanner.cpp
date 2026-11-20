@@ -240,11 +240,27 @@ SpectrumScanner::processDwell(int                                     ch,
         uint64_t f_lo   = static_cast<uint64_t>(std::llround(f_lo_q.in(au::hertz)));
         uint64_t f_hi   = static_cast<uint64_t>(std::llround(f_hi_q.in(au::hertz)));
         uint64_t fc     = static_cast<uint64_t>(std::llround(fc_q.in(au::hertz)));
-        uint64_t qfc    = (fc / PERSIST_FREQ_QUANT_HZ) * PERSIST_FREQ_QUANT_HZ;
+        // Same emission = the nearest entry within ±PERSIST_FREQ_QUANT_HZ.
+        // floor(fc / 10 kHz) buckets split every signal on a 10/12.5/25 kHz
+        // channel raster in two: sub-bin jitter around the raster frequency
+        // alternated between neighbouring buckets (ACQ-13).
+        uint64_t key  = fc;
+        uint64_t best = PERSIST_FREQ_QUANT_HZ + 1;
+        for (const auto& [k, e] : pmap)
+        {
+            const uint64_t dist = k > fc ? k - fc : fc - k;
+            if (dist < best && !seen_this_dwell.count(k))
+            {
+                best = dist;
+                key  = k;
+            }
+        }
+        if (best > PERSIST_FREQ_QUANT_HZ)
+            key = fc;
 
-        seen_this_dwell.insert(qfc);
+        seen_this_dwell.insert(key);
 
-        auto& pe = pmap[qfc];
+        auto& pe = pmap[key];
         ++pe.hits;
         pe.misses  = 0;
         pe.peak_db = std::max(pe.peak_db, s.peak_db);

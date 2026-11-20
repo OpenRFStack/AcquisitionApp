@@ -180,6 +180,168 @@ TEST(AuditAcq, Acq07_DestinationForWildcardBind)
     EXPECT_EQ(localAddressTowards("amqp://no-such-host.invalid:5672", "fb"), "fb");
 }
 
+namespace
+{
+// Band-limited noise: white complex Gaussian (seeded) filtered by an ideal
+// brick-wall in the frequency domain — a flat-topped wideband emission.
+std::vector<std::complex<float>>
+wideband(int n, double f0_over_fs, double bw_over_fs, float snr_db, unsigned seed = 1)
+{
+    std::vector<std::complex<float>> v((size_t)n);
+    uint32_t                         st = seed;
+    auto                             u  = [&]
+    {
+        st = st * 1'664'525u + 1'013'904'223u;
+        return ((st >> 8) + 0.5f) / 16777216.f;
+    };
+    auto g = [&]
+    {
+        const float r = std::sqrt(-2.f * std::log(u())), t = 2.f * (float)M_PI * u();
+        return std::complex<float>(r * std::cos(t), r * std::sin(t));
+    };
+    // signal = sum of many random-phase tones across the band (flat PSD)
+    const int           K   = 400;
+    const float         amp = std::pow(10.f, snr_db / 20.f) * 0.01f / std::sqrt((float)K);
+    std::vector<double> f(K), ph(K);
+    for (int k = 0; k < K; ++k)
+    {
+        f[(size_t)k]  = f0_over_fs + bw_over_fs * ((k + 0.5) / K - 0.5);
+        ph[(size_t)k] = 2 * M_PI * u();
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        std::complex<float> x = g() * 0.01f * 0.70710678f;  // noise floor
+        for (int k = 0; k < K; ++k)
+            x += std::polar(amp, (float)(2 * M_PI * f[(size_t)k] * i + ph[(size_t)k]));
+        v[(size_t)i] = x;
+    }
+    return v;
+}
+}  // namespace
+
+// ACQ-11: CA-CFAR's reference cells sat inside any emission wider than
+// guard + reference bins (40 bins = 98 kHz at 10 MS/s / 4096): the interior
+// measured against itself, so a 200 kHz signal came out as edge fragments.
+TEST(AuditAcq, Acq11_WideEmissionIsOneDetection)
+{
+    const double fs = 10e6;
+    FftProcessor p(4096, 8, 32);
+    auto         x   = wideband(65'536, 2e6 / fs, 200e3 / fs, 20.f);
+    auto         sig = p.detect(
+        x.data(), (int)x.size(), 10.f, 0.8f, au::hertz(fs), au::hertz(2500.0), au::hertz(50'000.0));
+    std::printf("ACQ-11: %zu detection(s)\n", sig.size());
+    for (auto& s : sig)
+        std::printf("   %.1f kHz .. %.1f kHz (centre %.1f kHz)\n",
+                    p.binToHz(s.start_bin, au::hertz(fs), au::hertz(0.0)).in(au::hertz) / 1e3,
+                    p.binToHz(s.end_bin, au::hertz(fs), au::hertz(0.0)).in(au::hertz) / 1e3,
+                    p.binToHz(s.center_bin, au::hertz(fs), au::hertz(0.0)).in(au::hertz) / 1e3);
+    ASSERT_EQ(sig.size(), 1u) << "wide emission split into fragments";
+    const double lo = p.binToHz(sig[0].start_bin, au::hertz(fs), au::hertz(0.0)).in(au::hertz);
+    const double hi = p.binToHz(sig[0].end_bin, au::hertz(fs), au::hertz(0.0)).in(au::hertz);
+    EXPECT_NEAR(hi - lo, 200e3, 30e3);
+    EXPECT_NEAR((hi + lo) / 2, 2e6, 15e3);
+    // ACQ-12: the reported centre of a flat-topped emission is its centre.
+    const double fc = p.binToHz(sig[0].center_bin, au::hertz(fs), au::hertz(0.0)).in(au::hertz);
+    EXPECT_NEAR(fc, 2e6, 5e3);
+}
+
+// ACQ-13: a weak carrier on a 10 kHz channel raster, jittering ±300 Hz
+// between sweeps, alternated between two persistence buckets (floor(fc/10k)),
+// so it needed twice the sweeps to confirm.
+namespace
+{
+class AlternatingSource : public IqSource
+{
+public:
+    AlternatingSource(Dwell a, Dwell b)
+        : a_(std::move(a))
+        , b_(std::move(b))
+    {
+    }
+
+    void open() override
+    {
+        running_ = true;
+    }
+
+    void close() override
+    {
+    }
+
+    void stop() override
+    {
+        running_ = false;
+    }
+
+    bool next(Dwell& d) override
+    {
+        if (!running_ || n_ >= 6)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            return running_ && false;
+        }
+        d = (n_++ % 2) ? b_ : a_;
+        return true;
+    }
+
+    int numChannels() const override
+    {
+        return 1;
+    }
+
+    std::atomic<int> n_{0};
+
+private:
+    Dwell             a_, b_;
+    std::atomic<bool> running_{false};
+};
+}  // namespace
+
+TEST(AuditAcq, Acq13_RasterCarrierConfirmsOnTheSecondSweep)
+{
+    SweepConfig cfg;
+    cfg.device.rx_channels     = 1;
+    cfg.device.sample_rate     = au::hertz(1e6);
+    cfg.sweep.fft_size         = 1024;
+    cfg.sweep.dwell_samples    = 8192;
+    cfg.sweep.threshold_db     = 10.0;
+    cfg.sweep.min_signal_bw_hz = au::hertz(500.0);
+    const double raster        = 100.1e6;  // multiple of 10 kHz
+    auto         mk            = [&](double off)
+    {
+        Dwell d;
+        d.center_hz      = au::hertz(100e6);
+        d.sample_rate_hz = 1e6;
+        d.ch_samples     = {wideband(8192, (raster + off - 100e6) / 1e6, 0.0, 0.f, 7)};
+        return d;
+    };
+    // a pure tone plus noise: wideband() with zero bandwidth and 0 dB "SNR"
+    // gives a carrier ~30 dB over the per-bin floor, PAPR < bypass
+    AlternatingSource src(mk(-300.0), mk(+300.0));
+    std::mutex        mu;
+    std::vector<int>  hits_at;  // dwell index of each emitted detection
+    SpectrumScanner   sc(cfg,
+                       &src,
+                       [&](const Detection& det)
+                       {
+                           std::lock_guard lk(mu);
+                           if (std::abs(det.center_freq_hz.in(au::hertz)-raster) < 2e3)
+                               hits_at.push_back(src.n_.load());
+                       });
+    sc.start();
+    for (int i = 0; i < 200 && src.n_.load() < 6; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    sc.stop();
+    std::lock_guard lk(mu);
+    ASSERT_FALSE(hits_at.empty()) << "never confirmed";
+    std::printf("ACQ-13: first detection after dwell %d; %zu detections in 6 dwells\n",
+                hits_at.front(),
+                hits_at.size());
+    EXPECT_EQ(hits_at.front(), 2) << "confirmation delayed by bucket splitting";
+    EXPECT_EQ(hits_at.size(), 5u);  // dwells 2..6
+}
+
 /*
 ========================================================================
 End of file — OpenRFStack
