@@ -38,7 +38,16 @@ SpectrumScanner::SpectrumScanner(SweepConfig cfg, IqSource* source, DetectionCal
     for (int i = 0; i < n_ch; ++i)
         processors_.push_back(std::make_unique<FftProcessor>(
             cfg_.sweep.fft_size, cfg_.sweep.cfar_guard_bins, cfg_.sweep.cfar_ref_bins));
-    ch_noise_floor_.resize((size_t)n_ch);
+    DspNoiseFloorConfig nf;
+    nf.pfa         = cfg_.sweep.noise_pfa;
+    nf.percentile  = cfg_.sweep.noise_percentile;
+    nf.block_bins  = cfg_.sweep.noise_block_bins;
+    nf.history     = cfg_.sweep.noise_history;
+    nf.max_tilt_db = cfg_.sweep.noise_max_tilt_db;
+    for (int i = 0; i < n_ch; ++i)
+        noise_.push_back(cfg_.sweep.noise_method == "cfar"
+                             ? nullptr
+                             : makeNoiseFloorEstimator(cfg_.sweep.noise_method, "", nf));
     ch_persist_.resize((size_t)n_ch);
 }
 
@@ -169,41 +178,32 @@ SpectrumScanner::processDwell(int                                     ch,
     // ── Step 1: Welch spectrum (includes IQ correction estimation) ────────────
     proc.computeSpectrum(samples.data(), static_cast<int>(samples.size()));
 
-    // ── Step 2: CA-CFAR detection ─────────────────────────────────────────────
-    // hist_floor is NOT passed to detectFromSpectrum here. The EMA floor is
-    // seeded from pdb (which includes signal power), so feeding it back into the
-    // detector would raise the threshold above persistent signals and suppress them.
-    // The floor is maintained separately for monitoring; it is not used in detection.
-    auto sigs = proc.detectFromSpectrum(static_cast<float>(cfg_.sweep.threshold_db),
-                                        static_cast<float>(cfg_.sweep.usable_bw_fraction),
-                                        sample_rate,
-                                        cfg_.sweep.min_signal_bw_hz,
-                                        cfg_.sweep.dc_guard_hz,
-                                        cfg_.sweep.min_papr_db,
-                                        nullptr);
-
-    // ── Step 3: Asymmetric-EMA per-frequency noise floor (monitoring only) ───
-    // Updated AFTER detection so signal-bin vs noise-bin distinction can be made.
-    // Rises quickly when new interference appears; falls slowly when it clears.
-    auto&       floor_map = ch_noise_floor_[ch];
-    auto        it        = floor_map.find(center_hz_raw);
-    const auto& pdb       = proc.powerDb();
-    if (it == floor_map.end())
+    // ── Step 2: noise floor + detection ───────────────────────────────────────
+    // NoiseFloorEstimator ("dsp"): per-bin floor and a false-alarm-rate margin
+    // that follows the number of Welch frames. "cfar": censored CA-CFAR with
+    // the fixed threshold_db.
+    NoiseFloorResult nf;
+    if (noise_[ch])
     {
-        floor_map[center_hz_raw] = pdb;
-        it                       = floor_map.find(center_hz_raw);
+        const auto [lo, hi] = proc.usableRange(static_cast<float>(cfg_.sweep.usable_bw_fraction));
+        NoiseFloorInput in;
+        in.power_db  = proc.powerDb().data();
+        in.fft_size  = proc.fft_size();
+        in.start_bin = lo;
+        in.end_bin   = hi;
+        in.n_frames  = proc.lastFrames();
+        in.key       = center_hz_raw;
+        nf           = noise_[ch]->estimate(in);
     }
-    else
-    {
-        const float alpha_fall = cfg_.sweep.noise_floor_alpha;
-        const float alpha_rise = std::min(4.0f * alpha_fall, 0.4f);
-        auto&       floor      = it->second;
-        for (int k = 0; k < (int)floor.size(); ++k)
-        {
-            float a  = (pdb[k] > floor[k]) ? alpha_rise : alpha_fall;
-            floor[k] = a * pdb[k] + (1.0f - a) * floor[k];
-        }
-    }
+    auto sigs =
+        proc.detectFromSpectrum(nf.ok ? nf.margin_db : static_cast<float>(cfg_.sweep.threshold_db),
+                                static_cast<float>(cfg_.sweep.usable_bw_fraction),
+                                sample_rate,
+                                cfg_.sweep.min_signal_bw_hz,
+                                cfg_.sweep.dc_guard_hz,
+                                cfg_.sweep.min_papr_db,
+                                nullptr,
+                                nf.ok ? &nf.floor_db : nullptr);
 
     // ── Step 4: Build IQ snapshot for ONNX fast-path / MUSIC ─────────────────
     // Built once per dwell and shared across all Detection objects via shared_ptr
@@ -286,8 +286,15 @@ SpectrumScanner::processDwell(int                                     ch,
         d.power_db       = s.peak_db;
         d.scanner_id     = cfg_.scanner_id;
         d.channel        = ch;
-        d.snr_db         = s.peak_db - s.mean_db;  // PAPR proxy
-        d.iq_snapshot    = dwell_snapshot;         // shared_ptr, zero-copy
+        d.snr_db         = s.peak_db - s.noise_db;  // above the local floor
+        d.papr_db        = s.peak_db - s.mean_db;
+        d.noise_floor_db = s.noise_db;
+        if (cfg_.sweep.dbm_offset_db)
+        {
+            d.noise_floor_dbm = s.noise_db + *cfg_.sweep.dbm_offset_db;
+            d.power_dbm       = s.peak_db + *cfg_.sweep.dbm_offset_db;
+        }
+        d.iq_snapshot              = dwell_snapshot;  // shared_ptr, zero-copy
         d.snapshot_sample_rate_sps = sample_rate;
         out.push_back(d);
     }

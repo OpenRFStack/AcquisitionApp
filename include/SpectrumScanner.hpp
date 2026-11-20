@@ -26,13 +26,15 @@ Contact author for permission: https://github.com/OpenRFStack
  * Signals with PAPR ≥ PERSIST_BYPASS_PAPR_DB (strong, obvious signals such
  * as FM broadcast or LTE) bypass persistence and emit on the first sweep.
  *
- * ## Per-frequency noise floor EMA
- * An asymmetric EMA tracks the observed power at each centre frequency across
- * sweeps.  Rising noise (new interference) adapts at 4 × alpha; falling noise
- * adapts at alpha (slower, avoids immediate re-detection).
+ * ## Noise floor
+ * Each dwell's floor comes from a NoiseFloorEstimator (<noise_floor>): per
+ * block ordered statistics plus minimum statistics over the last sweeps of
+ * the same entry, and a detection margin for a fixed false-alarm probability.
+ * method "cfar" keeps the censored CA-CFAR with a fixed threshold_db.
  */
 #include "FftProcessor.hpp"
 #include "IqSource.hpp"
+#include "NoiseFloorEstimator.hpp"
 #include "SweepConfig.hpp"
 #include "Types.hpp"
 
@@ -88,9 +90,8 @@ private:
     std::atomic<bool>                          running_{false};
     std::thread                                thread_;
 
-    /// Per-channel, per-centre-frequency asymmetric-EMA noise floor.
-    /// Rises at 4 × alpha (new interference) / falls at alpha (slow decay).
-    std::vector<std::unordered_map<uint64_t, std::vector<float>>> ch_noise_floor_;
+    /// Per-channel noise-floor estimator (keeps its own sweep history per entry).
+    std::vector<std::unique_ptr<NoiseFloorEstimator>> noise_;
 
     /// Persistence filter state: track hit/miss counts per (channel, centre_hz, freq).
     struct PersistEntry

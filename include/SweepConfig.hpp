@@ -21,7 +21,9 @@ Contact author for permission: https://github.com/OpenRFStack
  * All sub-structs (AmqpConfig, DeviceConfig, SweepParams, etc.) are
  * populated from the corresponding XML elements.
  */
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -62,6 +64,11 @@ struct DeviceConfig
     int                      rx_channels{1};                ///< Number of RX channels to request.
     au::QuantityD<au::Hertz> sample_rate{au::hertz(10e6)};  ///< Sample rate (samples/s).
     double                   rx_gain_db{40.0};              ///< RX gain (dB).
+    /// Hardware AGC (e.g. the AD9361's). Protects against overload from strong
+    /// signals, but the gain then differs per entry, so Detection::power_db
+    /// is relative to the AGC state rather than absolute. Detection itself
+    /// (CFAR, relative to the local floor) is unaffected. Default off.
+    bool                     rx_agc{false};
     au::QuantityD<au::Hertz> bandwidth_hz{
         au::hertz(10e6)};  ///< Requested RF bandwidth per channel.
     /// When non-empty: hard-pin all tasks from this scanner to this device and
@@ -80,8 +87,11 @@ struct SweepParams
 {
     au::QuantityD<au::Hertz> start_hz{au::hertz(70'000'000.0)};    ///< Sweep start frequency.
     au::QuantityD<au::Hertz> stop_hz{au::hertz(1'000'000'000.0)};  ///< Sweep stop frequency.
-    int                      dwell_samples{4096};  ///< IQ samples collected per dwell (≥ fft_size).
-    int                      fft_size{4096};       ///< FFT size (power of 2, ≥ 64).
+    /// IQ samples per dwell (≥ fft_size). 0 = auto: every sample of the
+    /// controller's minimum scan dwell (5 ms) — streamed anyway; more Welch
+    /// frames make the floor estimate tighter (see effectiveDwellSamples()).
+    int    dwell_samples{0};
+    int    fft_size{4096};            ///< FFT size (power of 2, ≥ 64).
     double usable_bw_fraction{0.80};  ///< Fraction of FFT bins examined (discards roll-off edges).
     double threshold_db{10.0};        ///< Detection threshold above local CA-CFAR noise (dB).
     au::QuantityD<au::Hertz> min_signal_bw_hz{
@@ -95,9 +105,21 @@ struct SweepParams
     /// Minimum peak-to-mean power ratio (dB) for multi-bin runs.
     /// Flat noise bumps below this threshold are rejected.
     float min_papr_db{3.0f};
-    /// EMA coefficient for the per-frequency noise floor tracker.
-    /// Smaller = slower adaptation.  Range (0, 1).
-    float noise_floor_alpha{0.08f};
+    /// @name Noise floor (<noise_floor> in <sweep>) — NoiseFloorEstimator.hpp
+    /// @{
+    /// "dsp" (default): ordered-statistic + minimum-statistics floor and a
+    /// false-alarm-rate margin; "cfar": censored CA-CFAR with threshold_db;
+    /// "ml": reserved (falls back to "dsp").
+    std::string noise_method{"dsp"};
+    double      noise_pfa{3e-3};         ///< per-bin false-alarm probability
+    double      noise_percentile{0.25};  ///< per-block ordered statistic
+    int         noise_block_bins{64};    ///< bins per block
+    int         noise_history{8};        ///< sweeps of minimum statistics (1 = off)
+    float       noise_max_tilt_db{6.f};  ///< block floor clamp around the band
+    /// dBFS → dBm calibration at the configured gain (front-end specific).
+    /// When set, detections also carry the floor and peak in dBm.
+    std::optional<double> dbm_offset_db;
+    /// @}
 };
 
 /// @brief UDP receive parameters for IQ data from SdrResourceManager.
@@ -192,6 +214,20 @@ inline int scanDwellMs(int dwell_samples, double sample_rate_sps)
         return kControllerMinDwellMs;
     const double ms = std::ceil(dwell_samples * 1000.0 / sample_rate_sps);
     return ms < kControllerMinDwellMs ? kControllerMinDwellMs : (int)ms;
+}
+
+/// Samples per dwell: dwell_samples, or for 0 (auto) 80 % of what the
+/// controller's minimum scan dwell streams (the timer can deliver a little
+/// less than fs × 5 ms; a target above that would never complete the last
+/// entry of a sweep), in whole Welch hops, at least fft_size.
+inline int effectiveDwellSamples(const SweepParams& sw, double sample_rate_sps)
+{
+    if (sw.dwell_samples > 0)
+        return sw.dwell_samples;
+    const double avail = 0.8 * sample_rate_sps * kControllerMinDwellMs / 1000.0;
+    const int    hop   = sw.fft_size / 2;
+    const int    n     = (int)((avail - sw.fft_size) / hop) * hop + sw.fft_size;
+    return std::clamp(n, sw.fft_size, 1 << 20);
 }
 
 /**

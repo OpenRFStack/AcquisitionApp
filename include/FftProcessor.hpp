@@ -39,6 +39,7 @@ Contact author for permission: https://github.com/OpenRFStack
 
 #include <complex>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <au/units/hertz.hh>
@@ -60,11 +61,12 @@ public:
      */
     struct Signal
     {
-        int   start_bin;   ///< First bin of the run (fftshift coordinates).
-        int   end_bin;     ///< Last bin of the run, inclusive (fftshift coordinates).
-        float peak_db;     ///< Peak power in the run (dBFS).
-        float mean_db;     ///< Mean power of the run (dBFS).
-        float center_bin;  ///< Sub-bin interpolated peak position (fftshift coordinates).
+        int   start_bin;       ///< First bin of the run (fftshift coordinates).
+        int   end_bin;         ///< Last bin of the run, inclusive (fftshift coordinates).
+        float peak_db;         ///< Peak power in the run (dBFS).
+        float mean_db;         ///< Mean power of the run (dBFS).
+        float center_bin;      ///< Sub-bin interpolated peak position (fftshift coordinates).
+        float noise_db = 0.f;  ///< Local noise floor under the run (dBFS) — SNR = peak − this.
     };
 
     /**
@@ -109,6 +111,10 @@ public:
      *                          as fft_size).  If provided, the local noise estimate
      *                          is raised to max(cfar, hist_floor[bin]) to suppress
      *                          persistent interference.  Pass nullptr to disable.
+     * @param floor_db          Optional per-bin noise floor (dBFS, fft_size bins)
+     *                          from a NoiseFloorEstimator. When given it replaces
+     *                          the CA-CFAR estimate: a bin is a detection when
+     *                          it is threshold_db above floor_db[bin].
      * @return Detected signal groups, sorted by peak_db descending.
      */
     std::vector<Signal> detectFromSpectrum(float                     threshold_db,
@@ -117,7 +123,8 @@ public:
                                            au::QuantityD<au::Hertz>  min_signal_bw_hz,
                                            au::QuantityD<au::Hertz>  dc_guard_hz = au::hertz(0.0),
                                            float                     min_papr_db = 3.0f,
-                                           const std::vector<float>* hist_floor  = nullptr);
+                                           const std::vector<float>* hist_floor  = nullptr,
+                                           const std::vector<float>* floor_db    = nullptr);
 
     /**
      * @brief Convenience: computeSpectrum() + detectFromSpectrum() in one call.
@@ -137,6 +144,19 @@ public:
                                au::QuantityD<au::Hertz>   sample_rate,
                                au::QuantityD<au::Hertz>   min_signal_bw_hz,
                                au::QuantityD<au::Hertz>   dc_guard_hz = au::hertz(0.0));
+
+    /// Bins detectFromSpectrum() examines for @p usable_fraction: [first, last].
+    std::pair<int, int> usableRange(float usable_fraction) const
+    {
+        const int margin = (int)(fft_size_ * (1.0 - usable_fraction) / 2.0);
+        return {margin, fft_size_ - 1 - margin};
+    }
+
+    /// Welch frames averaged by the last computeSpectrum() (0 before any).
+    int lastFrames() const
+    {
+        return last_frames_;
+    }
 
     /// @brief Power spectrum in dBFS after the last computeSpectrum() call.
     const std::vector<float>& powerDb() const
@@ -187,6 +207,7 @@ private:
     std::vector<float> scratch_;          ///< Scratch buffer — no per-call allocation.
     std::vector<float> psum_;             ///< CFAR prefix sum — pre-allocated.
     std::vector<int>   pcnt_;             ///< CFAR prefix count of noise-like cells.
+    int                last_frames_{0};
 
     void  accumFrame(const std::complex<float>* src);
     float estimateNoise(int start_bin, int end_bin);

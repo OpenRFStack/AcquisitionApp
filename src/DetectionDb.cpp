@@ -75,6 +75,7 @@ DetectionDb::DetectionDb(const std::string&         conn_str,
         ALTER TABLE signals ADD COLUMN IF NOT EXISTS lat   DOUBLE PRECISION;
         ALTER TABLE signals ADD COLUMN IF NOT EXISTS lon   DOUBLE PRECISION;
         ALTER TABLE signals ADD COLUMN IF NOT EXISTS alt_m REAL;
+        ALTER TABLE signals ADD COLUMN IF NOT EXISTS noise_floor_db REAL;
     )");
     txn.commit();
 
@@ -227,11 +228,11 @@ void DetectionDb::flush(std::vector<Detection>& batch)
                                                 : std::nullopt;
             txn.exec_params("INSERT INTO signals "
                             "(first_seen, last_seen, freq_hz, freq_mhz, bandwidth_hz, "
-                            " power_db, scanner_id, channel, lat, lon, alt_m) "
+                            " power_db, scanner_id, channel, lat, lon, alt_m, noise_floor_db) "
                             "VALUES ("
                             "  to_timestamp($1::double precision / 1000.0), "
                             "  to_timestamp($1::double precision / 1000.0), "
-                            "  $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                            "  $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
                             ms,
                             center_freq_raw,
                             center_freq_raw / 1e6,
@@ -241,7 +242,8 @@ void DetectionDb::flush(std::vector<Detection>& batch)
                             d.channel,
                             lat_opt,
                             lon_opt,
-                            alt_opt);
+                            alt_opt,
+                            d.noise_floor_db);
         }
     }
 

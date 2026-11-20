@@ -233,6 +233,8 @@ SweepConfig SweepConfig::from_file(const std::string& path)
     }
     if (auto* el = opt(dev, "rx_gain_db"))
         el->QueryDoubleText(&cfg.device.rx_gain_db);
+    if (auto* el = opt(dev, "rx_agc"))
+        el->QueryBoolText(&cfg.device.rx_agc);
     if (auto* el = opt(dev, "required_device_id"))
         cfg.device.required_device_id = textOrDefault(el);
     if (auto* el = opt(dev, "bandwidth_hz"))
@@ -285,14 +287,34 @@ SweepConfig SweepConfig::from_file(const std::string& path)
         el->QueryIntText(&cfg.sweep.cfar_ref_bins);
     if (auto* el = opt(sweep, "min_papr_db"))
         el->QueryFloatText(&cfg.sweep.min_papr_db);
-    if (auto* el = opt(sweep, "noise_floor_alpha"))
-        el->QueryFloatText(&cfg.sweep.noise_floor_alpha);
+    if (auto* nf = opt(sweep, "noise_floor"))
+    {
+        cfg.sweep.noise_method = textOrDefault(opt(nf, "method"), cfg.sweep.noise_method.c_str());
+        if (auto* el = opt(nf, "pfa"))
+            el->QueryDoubleText(&cfg.sweep.noise_pfa);
+        if (auto* el = opt(nf, "percentile"))
+            el->QueryDoubleText(&cfg.sweep.noise_percentile);
+        if (auto* el = opt(nf, "block_bins"))
+            el->QueryIntText(&cfg.sweep.noise_block_bins);
+        if (auto* el = opt(nf, "history"))
+            el->QueryIntText(&cfg.sweep.noise_history);
+        if (auto* el = opt(nf, "max_tilt_db"))
+            el->QueryFloatText(&cfg.sweep.noise_max_tilt_db);
+        if (auto* el = opt(nf, "dbm_offset_db"))
+        {
+            double v = 0.0;
+            if (el->QueryDoubleText(&v) == tinyxml2::XML_SUCCESS)
+                cfg.sweep.dbm_offset_db = v;
+        }
+    }
 
     if (cfg.sweep.stop_hz <= cfg.sweep.start_hz)
         throw std::runtime_error("sweep stop_hz must be > start_hz");
     if (cfg.sweep.fft_size < 64 || (cfg.sweep.fft_size & (cfg.sweep.fft_size - 1)) != 0)
         throw std::runtime_error("fft_size must be a power of 2 >= 64");
-    if (cfg.sweep.dwell_samples < cfg.sweep.fft_size)
+    if (cfg.sweep.dwell_samples < 0)
+        cfg.sweep.dwell_samples = 0;  // auto
+    else if (cfg.sweep.dwell_samples > 0 && cfg.sweep.dwell_samples < cfg.sweep.fft_size)
         cfg.sweep.dwell_samples = cfg.sweep.fft_size;
     if (cfg.sweep.usable_bw_fraction <= 0.0 || cfg.sweep.usable_bw_fraction > 1.0)
         throw std::runtime_error("usable_bw_fraction must be in (0, 1]");
@@ -300,8 +322,17 @@ SweepConfig SweepConfig::from_file(const std::string& path)
         throw std::runtime_error("cfar_guard_bins must be >= 0");
     if (cfg.sweep.cfar_ref_bins < 1)
         throw std::runtime_error("cfar_ref_bins must be >= 1");
-    if (cfg.sweep.noise_floor_alpha <= 0.0f || cfg.sweep.noise_floor_alpha > 1.0f)
-        throw std::runtime_error("noise_floor_alpha must be in (0, 1]");
+    if (cfg.sweep.noise_method != "dsp" && cfg.sweep.noise_method != "cfar"
+        && cfg.sweep.noise_method != "ml")
+        throw std::runtime_error("noise_floor method must be dsp, cfar or ml");
+    if (cfg.sweep.noise_pfa <= 0.0 || cfg.sweep.noise_pfa >= 0.5)
+        throw std::runtime_error("noise_floor pfa must be in (0, 0.5)");
+    if (cfg.sweep.noise_percentile <= 0.0 || cfg.sweep.noise_percentile >= 1.0)
+        throw std::runtime_error("noise_floor percentile must be in (0, 1)");
+    if (cfg.sweep.noise_block_bins < 8)
+        throw std::runtime_error("noise_floor block_bins must be >= 8");
+    if (cfg.sweep.noise_history < 1)
+        throw std::runtime_error("noise_floor history must be >= 1");
 
     // ── Apply pending bands now that sweep defaults are set ──────────────────
     cfg.bands = std::move(pending_bands);

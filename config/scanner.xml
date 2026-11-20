@@ -45,6 +45,9 @@
     <rx_channels>1</rx_channels>
     <sample_rate_sps>10000000</sample_rate_sps>  <!-- 10 MSPS -->
     <rx_gain_db>40</rx_gain_db>
+    <!-- Hardware AGC: overload protection, but levels (power_db) become
+         relative to the AGC state. Detection is unaffected. -->
+    <rx_agc>false</rx_agc>
     <bandwidth_hz>10000000</bandwidth_hz>
   </device>
 
@@ -55,12 +58,30 @@
   <sweep>
     <start_hz>70000000</start_hz>       <!-- 70 MHz  (single-SDR default) -->
     <stop_hz>1000000000</stop_hz>       <!-- 1 GHz   (single-SDR default) -->
-    <dwell_samples>4096</dwell_samples>
+    <!-- 0 = auto: the samples the controller's minimum 5 ms dwell streams
+         anyway (80 %), e.g. ~22 Welch frames at 10 MS/s — a tighter noise
+         floor and ~6 dB more sensitivity than one 4096-sample frame. -->
+    <dwell_samples>0</dwell_samples>
     <fft_size>4096</fft_size>
     <usable_bw_fraction>0.80</usable_bw_fraction>
     <threshold_db>10.0</threshold_db>
     <min_signal_bw_hz>2500</min_signal_bw_hz>
     <settle_samples>512</settle_samples>
+    <!-- Noise floor (NoiseFloorEstimator):
+           method   dsp  = per-block ordered statistic (percentile) + minimum
+                           statistics over the last `history` sweeps, margin
+                           set for a per-bin false-alarm probability `pfa`
+                    cfar = censored CA-CFAR with the fixed threshold_db above
+           dbm_offset_db (optional): dBFS → dBm at your gain/front end. -->
+    <noise_floor>
+      <method>dsp</method>
+      <pfa>0.003</pfa>
+      <percentile>0.25</percentile>
+      <block_bins>64</block_bins>
+      <history>8</history>
+      <max_tilt_db>6</max_tilt_db>
+      <!-- <dbm_offset_db>-30</dbm_offset_db> -->
+    </noise_floor>
   </sweep>
 
   <!-- ── Multi-band parallel scanning (optional) ───────────────────────── -->

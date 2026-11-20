@@ -190,6 +190,7 @@ if(PROTON_FOUND AND PQXX_FOUND)
         src/main.cpp
         src/SweepConfig.cpp
         src/FftProcessor.cpp
+        src/NoiseFloorEstimator.cpp
         src/SpectrumScanner.cpp
         src/TaskManagerIqSource.cpp
         src/DetectionDb.cpp

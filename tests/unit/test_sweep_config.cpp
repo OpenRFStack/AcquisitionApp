@@ -87,6 +87,7 @@ TEST_F(SweepConfigTest, DefaultsAppliedWhenOptionalElementsMissing)
     EXPECT_EQ(cfg.device.rx_channels, 1);
     EXPECT_DOUBLE_EQ(cfg.device.sample_rate.in(au::hertz), 10e6);
     EXPECT_DOUBLE_EQ(cfg.device.rx_gain_db, 40.0);
+    EXPECT_FALSE(cfg.device.rx_agc);
     EXPECT_EQ(cfg.sweep.fft_size, 4096);
     EXPECT_DOUBLE_EQ(cfg.sweep.threshold_db, 10.0);
     EXPECT_EQ(cfg.sweep.settle_samples, 512);
@@ -121,6 +122,7 @@ TEST_F(SweepConfigTest, ParsesAllOptionalFields)
             <rx_channels>2</rx_channels>
             <sample_rate_sps>20000000</sample_rate_sps>
             <rx_gain_db>50</rx_gain_db>
+            <rx_agc>true</rx_agc>
             <shared_lo>true</shared_lo>
           </device>
           <sweep>
@@ -152,6 +154,7 @@ TEST_F(SweepConfigTest, ParsesAllOptionalFields)
     EXPECT_EQ(cfg.device.rx_channels, 2);
     EXPECT_DOUBLE_EQ(cfg.device.sample_rate.in(au::hertz), 20e6);
     EXPECT_DOUBLE_EQ(cfg.device.rx_gain_db, 50.0);
+    EXPECT_TRUE(cfg.device.rx_agc);
 
     EXPECT_DOUBLE_EQ(cfg.sweep.start_hz.in(au::hertz), 88'000'000.0);
     EXPECT_DOUBLE_EQ(cfg.sweep.stop_hz.in(au::hertz), 108'000'000.0);
@@ -252,6 +255,71 @@ TEST_F(SweepConfigTest, DwellSamplesClampedToFftSize)
           </sweep>
         </sdr_acquisition>)");
     EXPECT_EQ(cfg.sweep.dwell_samples, 256);
+}
+
+TEST_F(SweepConfigTest, NoiseFloorBlockIsParsed)
+{
+    auto cfg = parse(R"(
+        <sdr_acquisition>
+          <device><driver>rtlsdr</driver><uri></uri></device>
+          <sweep>
+            <start_hz>100000000</start_hz>
+            <stop_hz>200000000</stop_hz>
+            <noise_floor>
+              <method>cfar</method>
+              <pfa>0.001</pfa>
+              <percentile>0.3</percentile>
+              <block_bins>32</block_bins>
+              <history>4</history>
+              <max_tilt_db>3</max_tilt_db>
+              <dbm_offset_db>-31.5</dbm_offset_db>
+            </noise_floor>
+          </sweep>
+        </sdr_acquisition>)");
+    EXPECT_EQ(cfg.sweep.noise_method, "cfar");
+    EXPECT_DOUBLE_EQ(cfg.sweep.noise_pfa, 0.001);
+    EXPECT_DOUBLE_EQ(cfg.sweep.noise_percentile, 0.3);
+    EXPECT_EQ(cfg.sweep.noise_block_bins, 32);
+    EXPECT_EQ(cfg.sweep.noise_history, 4);
+    EXPECT_FLOAT_EQ(cfg.sweep.noise_max_tilt_db, 3.f);
+    ASSERT_TRUE(cfg.sweep.dbm_offset_db.has_value());
+    EXPECT_DOUBLE_EQ(*cfg.sweep.dbm_offset_db, -31.5);
+}
+
+TEST_F(SweepConfigTest, NoiseFloorDefaultsAndValidation)
+{
+    auto cfg = parse(R"(
+        <sdr_acquisition>
+          <device><driver>rtlsdr</driver><uri></uri></device>
+          <sweep><start_hz>100000000</start_hz><stop_hz>200000000</stop_hz></sweep>
+        </sdr_acquisition>)");
+    EXPECT_EQ(cfg.sweep.noise_method, "dsp");
+    EXPECT_FALSE(cfg.sweep.dbm_offset_db.has_value());
+    EXPECT_THROW(parse(R"(
+        <sdr_acquisition>
+          <device><driver>rtlsdr</driver><uri></uri></device>
+          <sweep><start_hz>100000000</start_hz><stop_hz>200000000</stop_hz>
+            <noise_floor><method>magic</method></noise_floor></sweep>
+        </sdr_acquisition>)"),
+                 std::runtime_error);
+}
+
+// dwell_samples 0 = auto: what the controller's 5 ms minimum dwell streams
+// (80 %), in whole Welch hops — 4096 used to be one frame of ~50 000 streamed.
+TEST_F(SweepConfigTest, AutoDwellUsesTheMinimumScanDwell)
+{
+    SweepParams sw;
+    sw.fft_size      = 4096;
+    sw.dwell_samples = 0;
+    const int n      = effectiveDwellSamples(sw, 10e6);
+    EXPECT_LE(n, 40'000);
+    EXPECT_GT(n, 36'000);
+    EXPECT_EQ((n - 4096) % 2048, 0);
+    EXPECT_EQ(scanDwellMs(n, 10e6), 5);  // costs no sweep time
+    sw.dwell_samples = 8192;
+    EXPECT_EQ(effectiveDwellSamples(sw, 10e6), 8192);
+    sw.dwell_samples = 0;
+    EXPECT_EQ(effectiveDwellSamples(sw, 100e3), 4096);  // never below one frame
 }
 
 TEST_F(SweepConfigTest, RxChannelsClampedToAtLeastOne)

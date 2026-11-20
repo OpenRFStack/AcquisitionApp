@@ -44,7 +44,9 @@ add_executable(acq_tests
     unit/test_gps_cache.cpp
     unit/test_dwell_assembler.cpp
     unit/test_audit_acq.cpp
+    unit/test_noise_floor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/FftProcessor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/NoiseFloorEstimator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/SweepConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/SpectrumScanner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/P25GrantConsumer.cpp

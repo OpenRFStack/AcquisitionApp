@@ -317,7 +317,9 @@ TaskManagerIqSource::TaskManagerIqSource(const SweepConfig& cfg,
     : cfg_(cfg)
     , preferred_device_(std::move(preferred_device))
     , device_required_(device_required)
-    , assembler_(cfg.device.rx_channels, cfg.sweep.dwell_samples, cfg.sweep.settle_samples)
+    , assembler_(cfg.device.rx_channels,
+                 effectiveDwellSamples(cfg.sweep, cfg.device.sample_rate.in(au::hertz)),
+                 cfg.sweep.settle_samples)
     , resume_hz_(cfg.sweep.start_hz)
 {
     pkt_buf_.resize(65'536);
@@ -397,7 +399,7 @@ std::string TaskManagerIqSource::buildScanRequest(const std::string& req_id) con
     const double resume   = resume_hz_.in(au::hertz);
 
     const double step_hz  = sr_hz * cfg_.sweep.usable_bw_fraction;
-    const int    dwell_ms = scanDwellMs(cfg_.sweep.dwell_samples, sr_hz);
+    const int    dwell_ms = scanDwellMs(effectiveDwellSamples(cfg_.sweep, sr_hz), sr_hz);
 
     // Entries on a fixed grid, starting at the entry that contains resume_hz
     // and wrapping, so a re-submission after preemption continues the sweep
@@ -442,6 +444,7 @@ std::string TaskManagerIqSource::buildScanRequest(const std::string& req_id) con
                   {"sample_rate_sps", sr_hz},
                   {"rx_count", cfg_.device.rx_channels},
                   {"rx_gain_db", gains},
+                  {"rx_agc", std::vector<bool>(cfg_.device.rx_channels, cfg_.device.rx_agc)},
                   {device_required_ ? "required_device" : "preferred_device", preferred_device_}}},
                 {"streaming", streaming_obj},
                 {"scan_params", {{"repeat", false}, {"entries", entries}}}};

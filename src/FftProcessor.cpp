@@ -135,6 +135,7 @@ void FftProcessor::computeSpectrum(const std::complex<float>* samples, int n_sam
     if (n_samples < fft_size_)
         return;
     const int n_frames = (n_samples - fft_size_) / hop + 1;
+    last_frames_       = n_frames;
     std::fill(linear_acc_.begin(), linear_acc_.end(), 0.f);
     for (int f = 0; f < n_frames; ++f)
         accumFrame(samples + f * hop);
@@ -162,7 +163,8 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
                                  au::QuantityD<au::Hertz>  min_signal_bw_hz,
                                  au::QuantityD<au::Hertz>  dc_guard_hz,
                                  float                     min_papr_db,
-                                 const std::vector<float>* hist_floor)
+                                 const std::vector<float>* hist_floor,
+                                 const std::vector<float>* floor_db)
 {
     const double sample_rate_hz = sample_rate.in(au::hertz);
     const double min_bw_hz      = min_signal_bw_hz.in(au::hertz);
@@ -263,7 +265,7 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
                     if (std::abs(denom) > 1e-6f)
                         center_bin_f = (float)peak_bin_abs + (y2 - y0) / denom;
                 }
-                signals.push_back({run_start, run_end_abs, peak, mean, center_bin_f});
+                signals.push_back({run_start, run_end_abs, peak, mean, center_bin_f, run_noise});
             }
         }
         run_start    = -1;
@@ -278,14 +280,19 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
 
     for (int k = start_bin; k <= end_bin; ++k)
     {
-        int i               = k - start_bin;
-        const auto [ls, lc] = ref_cells(i - G - R, i - G - 1);
-        const auto [rs, rc] = ref_cells(i + G + 1, i + G + R);
+        int   i = k - start_bin;
         float local_noise;
-        if (lc + rc >= min_ref)
-            local_noise = (ls + rs) / (float)(lc + rc);
+        if (floor_db && k < (int)floor_db->size())
+            local_noise = (*floor_db)[(size_t)k];  // NoiseFloorEstimator
         else
-            local_noise = global_noise;
+        {
+            const auto [ls, lc] = ref_cells(i - G - R, i - G - 1);
+            const auto [rs, rc] = ref_cells(i + G + 1, i + G + R);
+            if (lc + rc >= min_ref)
+                local_noise = (ls + rs) / (float)(lc + rc);
+            else
+                local_noise = global_noise;
+        }
 
         if (hist_floor && k < (int)hist_floor->size())
             local_noise = std::max(local_noise, (*hist_floor)[k]);

@@ -34,7 +34,8 @@ namespace acq
 {
 
 /// @brief RF_DETECTION schema version emitted by this build.
-inline constexpr const char* SCHEMA_VERSION = "1.2";  // base64 iq_snapshot, snr_db
+inline constexpr const char* SCHEMA_VERSION =
+    "1.3";  // 1.2: base64 iq_snapshot; 1.3: snr_db = SNR, papr_db, noise_floor_db[m]
 
 /**
  * @brief A confirmed RF signal detection from one dwell of a frequency sweep.
@@ -55,7 +56,13 @@ struct Detection
     float                    power_db{0.f};  ///< Peak power in the detection run (dBFS).
     std::string              scanner_id;     ///< Scanner identifier from SweepConfig.
     int                      channel{0};     ///< RX channel index (0-based).
-    float                    snr_db{0.f};  ///< PAPR of the detected signal group (peak − mean, dB).
+    /// Peak above the local noise floor (dB). It used to carry the PAPR.
+    float snr_db{0.f};
+    float papr_db{0.f};         ///< Peak − mean power over the detection run (dB).
+    float noise_floor_db{0.f};  ///< Noise floor under the detection (dBFS per bin).
+    /// Floor and peak in dBm when <noise_floor><dbm_offset_db> is configured.
+    std::optional<double> noise_floor_dbm;
+    std::optional<double> power_dbm;
 
     /// 1 024-sample IQ snapshot from the detecting dwell (interleaved float32 I,Q,…).
     /// Shared across all detections from the same dwell — zero-copy shared_ptr.

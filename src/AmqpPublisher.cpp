@@ -153,7 +153,13 @@ proton::message AmqpPublisher::makeMessage(const Detection& d) const
                  {"bandwidth_hz", d.bandwidth_hz.in(au::hertz)},
                  {"power_db", d.power_db},
                  {"snr_db", d.snr_db},
+                 {"papr_db", d.papr_db},
+                 {"noise_floor_db", d.noise_floor_db},
                  {"channel", d.channel}};
+    if (d.noise_floor_dbm)
+        body["noise_floor_dbm"] = *d.noise_floor_dbm;
+    if (d.power_dbm)
+        body["power_dbm"] = *d.power_dbm;
 
     // IQ snapshot: base64-encoded raw float32 bytes (~11 KB) instead of a
     // JSON float array (~28 KB). Receivers decode with sdr::base64::decodeFloats().
