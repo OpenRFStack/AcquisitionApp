@@ -79,6 +79,30 @@ struct Detection
     /// @}
 };
 
+/**
+ * @brief Per-bin noise / occupancy map of one scan entry (RF_NOISE_MAP).
+ *
+ * Point i covers [f_start_hz + i·point_hz, f_start_hz + (i+1)·point_hz).
+ * When several FFT bins share a point: floor_db is their mean, quiet_db their
+ * maximum (a narrow persistent carrier must stay visible) and occupancy the
+ * maximum.
+ */
+struct NoiseMap
+{
+    std::chrono::system_clock::time_point timestamp;
+    std::string                           scanner_id;
+    int                                   channel{0};
+    double                                center_freq_hz{0.0};  ///< scan entry centre
+    double                                sample_rate_hz{0.0};
+    double                                f_start_hz{0.0};  ///< low edge of point 0
+    double                                point_hz{0.0};    ///< width of one point
+    int                                   sweeps{0};        ///< sweeps in this window
+    std::vector<float>                    floor_db;  ///< estimated noise floor (dBFS per FFT bin)
+    std::vector<float>    quiet_db;       ///< per-bin minimum level over the window (dBFS)
+    std::vector<float>    occupancy;      ///< fraction of sweeps above floor + margin
+    std::optional<double> dbm_offset_db;  ///< dBFS → dBm, when configured
+};
+
 }  // namespace acq
 
 /*

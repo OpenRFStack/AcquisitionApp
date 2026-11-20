@@ -95,6 +95,43 @@ void AmqpPublisher::publish(const Detection& d)
         });
 }
 
+std::string AmqpPublisher::noiseMapJson(const NoiseMap& m)
+{
+    const auto ms   = duration_cast<milliseconds>(m.timestamp.time_since_epoch()).count();
+    json       body = {{"msg_type", "RF_NOISE_MAP"},
+                       {"schema_version", "1.0"},
+                       {"timestamp_ms", ms},
+                       {"scanner_id", m.scanner_id},
+                       {"channel", m.channel},
+                       {"center_freq_hz", m.center_freq_hz},
+                       {"sample_rate_hz", m.sample_rate_hz},
+                       {"f_start_hz", m.f_start_hz},
+                       {"point_hz", m.point_hz},
+                       {"sweeps", m.sweeps},
+                       {"floor_db", m.floor_db},
+                       {"quiet_db", m.quiet_db},
+                       {"occupancy", m.occupancy}};
+    if (m.dbm_offset_db)
+        body["dbm_offset_db"] = *m.dbm_offset_db;
+    return body.dump();
+}
+
+void AmqpPublisher::publish(const NoiseMap& m)
+{
+    auto* wq = work_queue_.load();
+    if (!wq || stopping_)
+        return;
+    proton::message msg;
+    msg.body(noiseMapJson(m));
+    msg.content_type("application/json");
+    wq->add(
+        [this, msg]() mutable
+        {
+            if (sender_)
+                sender_.send(msg);
+        });
+}
+
 void AmqpPublisher::on_container_start(proton::container& c)
 {
     proton::connection_options opts;

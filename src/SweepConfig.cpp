@@ -337,6 +337,22 @@ SweepConfig SweepConfig::from_file(const std::string& path)
     // ── Apply pending bands now that sweep defaults are set ──────────────────
     cfg.bands = std::move(pending_bands);
 
+    // ── Noise map ────────────────────────────────────────────────────────────
+    if (auto* nm = opt(root, "noise_map"))
+    {
+        if (auto* el = opt(nm, "enabled"))
+            el->QueryBoolText(&cfg.noise_map.enabled);
+        if (auto* el = opt(nm, "every_sweeps"))
+            el->QueryIntText(&cfg.noise_map.every_sweeps);
+        if (auto* el = opt(nm, "bins"))
+            el->QueryIntText(&cfg.noise_map.bins);
+        cfg.noise_map.topic = textOrDefault(opt(nm, "topic"), cfg.noise_map.topic.c_str());
+        if (cfg.noise_map.every_sweeps < 1)
+            throw std::runtime_error("noise_map every_sweeps must be >= 1");
+        if (cfg.noise_map.bins < 0)
+            throw std::runtime_error("noise_map bins must be >= 0");
+    }
+
     // ── Receiver ─────────────────────────────────────────────────────────────
     if (auto* rx = opt(root, "receiver"))
     {

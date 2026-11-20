@@ -122,6 +122,21 @@ struct SweepParams
     /// @}
 };
 
+/// @brief Per-bin noise map publication (<noise_map>, off by default).
+///
+/// Every `every_sweeps` sweeps of a scan entry, one RF_NOISE_MAP message with
+/// floor_db (the estimator's floor), quiet_db (each bin's own minimum level
+/// over the window — a continuous carrier shows here, it is never fed back
+/// into detection) and occupancy (fraction of sweeps above the detection
+/// margin), reduced to `bins` points (0 = every examined FFT bin).
+struct NoiseMapConfig
+{
+    bool        enabled{false};
+    int         every_sweeps{10};
+    int         bins{256};
+    std::string topic{"rf.noise_map"};
+};
+
 /// @brief UDP receive parameters for IQ data from SdrResourceManager.
 struct ReceiverConfig
 {
@@ -313,13 +328,14 @@ struct SweepConfig
      */
     std::vector<std::string> scan_device_ids;
 
-    AmqpConfig     amqp;      ///< AMQP broker connection and topic config.
-    DbConfig       db;        ///< PostgreSQL connection config.
-    DeviceConfig   device;    ///< SDR hardware capabilities to request from SdrRM.
-    SweepParams    sweep;     ///< Frequency sweep and detection parameters (shared defaults).
-    ReceiverConfig receiver;  ///< UDP IQ receive socket config.
-    P25Config      p25;       ///< P25 voice channel follower (disabled by default).
-    ThreatConfig   threat;    ///< Threat detection monitors (all disabled by default).
+    AmqpConfig     amqp;       ///< AMQP broker connection and topic config.
+    DbConfig       db;         ///< PostgreSQL connection config.
+    DeviceConfig   device;     ///< SDR hardware capabilities to request from SdrRM.
+    SweepParams    sweep;      ///< Frequency sweep and detection parameters (shared defaults).
+    ReceiverConfig receiver;   ///< UDP IQ receive socket config.
+    P25Config      p25;        ///< P25 voice channel follower (disabled by default).
+    ThreatConfig   threat;     ///< Threat detection monitors (all disabled by default).
+    NoiseMapConfig noise_map;  ///< Per-bin noise map publication (disabled by default).
 
     /**
      * @brief Load SweepConfig from an XML file.

@@ -81,6 +81,13 @@ public:
     /// @brief Signal stop, close the IqSource, and join the sweep thread.
     void stop();
 
+    /// Receives RF_NOISE_MAP data when cfg.noise_map.enabled (call before
+    /// start()). Invoked from the processing thread of the dwell's channel.
+    void setNoiseMapCallback(std::function<void(const NoiseMap&)> cb)
+    {
+        map_cb_ = std::move(cb);
+    }
+
 private:
     SweepConfig       cfg_;
     IqSource*         source_;
@@ -92,6 +99,23 @@ private:
 
     /// Per-channel noise-floor estimator (keeps its own sweep history per entry).
     std::vector<std::unique_ptr<NoiseFloorEstimator>> noise_;
+
+    /// Noise-map accumulation per channel and scan entry (cfg.noise_map).
+    struct NoiseAccum
+    {
+        int                sweeps = 0, lo = 0, hi = -1, fft = 0;
+        std::vector<float> floor_sum, quiet, occ;
+    };
+
+    std::vector<std::unordered_map<uint64_t, NoiseAccum>> ch_map_;
+    std::function<void(const NoiseMap&)>                  map_cb_;
+
+    void accumulateNoiseMap(int                     ch,
+                            uint64_t                key,
+                            double                  center_hz,
+                            double                  sample_rate_hz,
+                            const FftProcessor&     proc,
+                            const NoiseFloorResult& nf);
 
     /// Persistence filter state: track hit/miss counts per (channel, centre_hz, freq).
     struct PersistEntry

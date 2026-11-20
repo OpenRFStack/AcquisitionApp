@@ -49,6 +49,7 @@ SpectrumScanner::SpectrumScanner(SweepConfig cfg, IqSource* source, DetectionCal
                              ? nullptr
                              : makeNoiseFloorEstimator(cfg_.sweep.noise_method, "", nf));
     ch_persist_.resize((size_t)n_ch);
+    ch_map_.resize((size_t)n_ch);
 }
 
 SpectrumScanner::~SpectrumScanner()
@@ -205,6 +206,10 @@ SpectrumScanner::processDwell(int                                     ch,
                                 nullptr,
                                 nf.ok ? &nf.floor_db : nullptr);
 
+    if (map_cb_ && cfg_.noise_map.enabled && nf.ok)
+        accumulateNoiseMap(
+            ch, center_hz_raw, center_hz.in(au::hertz), sample_rate.in(au::hertz), proc, nf);
+
     // ── Step 4: Build IQ snapshot for ONNX fast-path / MUSIC ─────────────────
     // Built once per dwell and shared across all Detection objects via shared_ptr
     // (zero-copy: N detections → one allocation instead of N × 8 KB copies).
@@ -322,6 +327,77 @@ SpectrumScanner::processDwell(int                                     ch,
 
     return out;
 }
+
+void SpectrumScanner::accumulateNoiseMap(int                     ch,
+                                         uint64_t                key,
+                                         double                  center_hz,
+                                         double                  sample_rate_hz,
+                                         const FftProcessor&     proc,
+                                         const NoiseFloorResult& nf)
+{
+    const auto [lo, hi] = proc.usableRange(static_cast<float>(cfg_.sweep.usable_bw_fraction));
+    const int   n       = hi - lo + 1;
+    const auto& pdb     = proc.powerDb();
+    auto&       a       = ch_map_[(size_t)ch][key];
+    if (a.lo != lo || a.hi != hi || a.fft != proc.fft_size())
+    {
+        a     = NoiseAccum{};
+        a.lo  = lo;
+        a.hi  = hi;
+        a.fft = proc.fft_size();
+        a.floor_sum.assign((size_t)n, 0.f);
+        a.quiet.assign((size_t)n, 1e30f);
+        a.occ.assign((size_t)n, 0.f);
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        const int   k = lo + i;
+        const float p = pdb[(size_t)k];
+        a.floor_sum[(size_t)i] += nf.floor_db[(size_t)k];
+        a.quiet[(size_t)i] = std::min(a.quiet[(size_t)i], p);
+        if (p >= nf.floor_db[(size_t)k] + nf.margin_db)
+            a.occ[(size_t)i] += 1.f;
+    }
+    if (++a.sweeps < cfg_.noise_map.every_sweeps)
+        return;
+
+    // Reduce to cfg_.noise_map.bins points (0 = every examined bin).
+    const int    g      = cfg_.noise_map.bins > 0
+                              ? std::max(1, (n + cfg_.noise_map.bins - 1) / cfg_.noise_map.bins)
+                              : 1;
+    const double bin_hz = sample_rate_hz / proc.fft_size();
+    NoiseMap     m;
+    m.timestamp      = system_clock::now();
+    m.scanner_id     = cfg_.scanner_id;
+    m.channel        = ch;
+    m.center_freq_hz = center_hz;
+    m.sample_rate_hz = sample_rate_hz;
+    m.f_start_hz     = center_hz + ((double)lo - proc.fft_size() / 2 - 0.5) * bin_hz;
+    m.point_hz       = g * bin_hz;
+    m.sweeps         = a.sweeps;
+    m.dbm_offset_db  = cfg_.sweep.dbm_offset_db;
+    for (int s = 0; s < n; s += g)
+    {
+        const int e     = std::min(n, s + g);
+        double    fsum  = 0.0;
+        float     quiet = -1e30f, occ = 0.f;
+        for (int i = s; i < e; ++i)
+        {
+            fsum += a.floor_sum[(size_t)i] / (float)a.sweeps;
+            quiet = std::max(quiet, a.quiet[(size_t)i]);
+            occ   = std::max(occ, a.occ[(size_t)i] / (float)a.sweeps);
+        }
+        m.floor_db.push_back((float)(fsum / (e - s)));
+        m.quiet_db.push_back(quiet);
+        m.occupancy.push_back(occ);
+    }
+    a.sweeps = 0;
+    std::fill(a.floor_sum.begin(), a.floor_sum.end(), 0.f);
+    std::fill(a.quiet.begin(), a.quiet.end(), 1e30f);
+    std::fill(a.occ.begin(), a.occ.end(), 0.f);
+    map_cb_(m);
+}
+
 }  // namespace acq
 
 /*

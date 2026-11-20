@@ -386,6 +386,67 @@ TEST(AuditAcq, Acq15_StrongFlatEmissionEmitsOnTheFirstSweep)
     EXPECT_GT(snr, 25.0);
 }
 
+// Noise map: a continuous carrier shows in quiet_db and occupancy at its
+// point, while floor_db there stays the surrounding floor — it is reported,
+// never absorbed into the floor used for detection.
+TEST(AuditAcq, NoiseMapReportsPersistentCarrierWithoutRaisingTheFloor)
+{
+    SweepConfig cfg;
+    cfg.device.rx_channels     = 1;
+    cfg.device.sample_rate     = au::hertz(10e6);
+    cfg.sweep.fft_size         = 4096;
+    cfg.sweep.min_signal_bw_hz = au::hertz(2500.0);
+    cfg.noise_map.enabled      = true;
+    cfg.noise_map.every_sweeps = 3;
+    cfg.noise_map.bins         = 64;
+    Dwell d;
+    d.center_hz      = au::hertz(100e6);
+    d.sample_rate_hz = 10e6;
+    d.ch_samples     = {wideband(32'768, 1e6 / 10e6, 0.0, 10.f, 5)};  // carrier at +1 MHz
+    AlternatingSource     src(d, d);
+    std::mutex            mu;
+    std::vector<NoiseMap> maps;
+    SpectrumScanner       sc(cfg,
+                       &src,
+                       [](const Detection&)
+                       {
+                       });
+    sc.setNoiseMapCallback(
+        [&](const NoiseMap& m)
+        {
+            std::lock_guard lk(mu);
+            maps.push_back(m);
+        });
+    sc.start();
+    for (int i = 0; i < 400 && src.n_.load() < 6; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    sc.stop();
+    std::lock_guard lk(mu);
+    ASSERT_EQ(maps.size(), 2u) << "one map per 3 sweeps";
+    const auto& m = maps[0];
+    EXPECT_EQ(m.sweeps, 3);
+    ASSERT_EQ(m.floor_db.size(), 64u);
+    const int carrier = (int)((101e6 - m.f_start_hz) / m.point_hz);
+    ASSERT_GE(carrier, 0);
+    ASSERT_LT(carrier, 64);
+    std::vector<float> fl = m.floor_db;
+    std::nth_element(fl.begin(), fl.begin() + 32, fl.end());
+    const float med_floor = fl[32];
+    std::printf(
+        "NoiseMap: point %d (101 MHz): floor %.1f, quiet %.1f, occupancy %.2f; median floor "
+        "%.1f dBFS\n",
+        carrier,
+        m.floor_db[(size_t)carrier],
+        m.quiet_db[(size_t)carrier],
+        m.occupancy[(size_t)carrier],
+        med_floor);
+    EXPECT_NEAR(m.floor_db[(size_t)carrier], med_floor, 1.0) << "carrier absorbed into the floor";
+    EXPECT_GT(m.quiet_db[(size_t)carrier], med_floor + 20.f);
+    EXPECT_FLOAT_EQ(m.occupancy[(size_t)carrier], 1.f);
+    EXPECT_LT(m.occupancy[(size_t)((carrier + 20) % 64)], 0.5f);
+}
+
 /*
 ========================================================================
 End of file — OpenRFStack

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OpenRFStack/AcquisitionApp/schema/rf_noise_map.schema.json",
+  "title": "RF_NOISE_MAP",
+  "description": "Per-bin noise floor, quiet level and occupancy of one scan entry, published by AcquisitionApp every <noise_map><every_sweeps> sweeps when <noise_map><enabled> is true. Point i covers [f_start_hz + i*point_hz, f_start_hz + (i+1)*point_hz).",
+  "type": "object",
+  "required": [
+    "msg_type", "schema_version", "timestamp_ms", "scanner_id", "channel",
+    "center_freq_hz", "sample_rate_hz", "f_start_hz", "point_hz", "sweeps",
+    "floor_db", "quiet_db", "occupancy"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "msg_type":       { "const": "RF_NOISE_MAP" },
+    "schema_version": { "type": "string", "examples": ["1.0"] },
+    "timestamp_ms":   { "type": "integer", "description": "Unix epoch milliseconds when the window closed." },
+    "scanner_id":     { "type": "string" },
+    "channel":        { "type": "integer", "minimum": 0 },
+    "center_freq_hz": { "type": "number", "description": "Centre frequency of the scan entry." },
+    "sample_rate_hz": { "type": "number", "exclusiveMinimum": 0 },
+    "f_start_hz":     { "type": "number", "description": "Low edge of point 0." },
+    "point_hz":       { "type": "number", "exclusiveMinimum": 0, "description": "Width of one point (one or more FFT bins)." },
+    "sweeps":         { "type": "integer", "minimum": 1, "description": "Sweeps of this entry in the window." },
+    "floor_db": {
+      "type": "array", "items": { "type": "number" },
+      "description": "Estimated noise floor, dBFS per FFT bin (mean over the window and over the bins of a point). The value detection compares against."
+    },
+    "quiet_db": {
+      "type": "array", "items": { "type": "number" },
+      "description": "Each bin's own minimum level over the window, dBFS (maximum over the bins of a point). Equals the floor where the band is quiet; a continuous carrier or spur raises it. Reported only, never used for detection."
+    },
+    "occupancy": {
+      "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 },
+      "description": "Fraction of sweeps in which the bin exceeded floor + detection margin (maximum over the bins of a point)."
+    },
+    "dbm_offset_db": {
+      "type": "number",
+      "description": "dBFS to dBm offset (<noise_floor><dbm_offset_db>), when configured: dBm = dBFS + dbm_offset_db."
+    }
+  }
+}

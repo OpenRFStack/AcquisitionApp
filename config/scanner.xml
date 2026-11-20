@@ -6,7 +6,7 @@
   It submits a SCAN task via AMQP and receives CF32 IQ data over UDP.
   It does NOT open SoapySDR directly.
 
-  Build:  cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+  Build:  ./build.sh   (CMake, Release)
   Run:    ./build/sdr_acquisition config/scanner.xml
   DB:     psql -U sdr -d sdr_scanner -f schema/init.sql   (run once first)
 -->
@@ -83,6 +83,18 @@
       <!-- <dbm_offset_db>-30</dbm_offset_db> -->
     </noise_floor>
   </sweep>
+
+  <!-- ── Per-bin noise map (RF_NOISE_MAP, off by default) ─────────────── -->
+  <!-- Every every_sweeps sweeps of each scan entry: floor_db (estimated floor),
+       quiet_db (each bin's own minimum over the window — continuous carriers
+       show up here) and occupancy (fraction of sweeps above the detection
+       margin), reduced to `bins` points (0 = every FFT bin). -->
+  <noise_map>
+    <enabled>false</enabled>
+    <every_sweeps>10</every_sweeps>
+    <bins>256</bins>
+    <topic>rf.noise_map</topic>
+  </noise_map>
 
   <!-- ── Multi-band parallel scanning (optional) ───────────────────────── -->
   <!-- Uncomment and populate to run one scanner per band, each automatically

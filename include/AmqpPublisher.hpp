@@ -85,6 +85,12 @@ public:
      */
     void publish(const Detection& d);
 
+    /// @brief Publish a NoiseMap (RF_NOISE_MAP) on this publisher's topic.
+    void publish(const NoiseMap& m);
+
+    /// @brief JSON body of an RF_NOISE_MAP message (exposed for tests).
+    static std::string noiseMapJson(const NoiseMap& m);
+
     /// @cond INTERNAL
     void on_container_start(proton::container&) override;
     void on_connection_open(proton::connection&) override;

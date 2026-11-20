@@ -120,6 +120,26 @@ int main(int argc, char* argv[])
         spdlog::warn("AMQP publisher failed to start: {} — continuing without AMQP", e.what());
     }
 
+    // ── Per-bin noise map publisher (<noise_map>, off by default) ─────────
+    std::unique_ptr<acq::AmqpPublisher> noise_pub;
+    if (cfg.noise_map.enabled)
+    {
+        try
+        {
+            noise_pub = std::make_unique<acq::AmqpPublisher>(cfg.amqp.url,
+                                                             cfg.amqp.username,
+                                                             cfg.amqp.password,
+                                                             cfg.noise_map.topic,
+                                                             cfg.scanner_id);
+            noise_pub->start();
+        }
+        catch (const std::exception& e)
+        {
+            spdlog::warn("Noise-map publisher failed to start: {} — no noise maps", e.what());
+            noise_pub.reset();
+        }
+    }
+
     // ── PostgreSQL detection writer ───────────────────────────────────────
     std::unique_ptr<acq::DetectionDb> db;
     bool                              db_ok = false;
@@ -301,7 +321,15 @@ int main(int argc, char* argv[])
     }
 
     for (auto& s : scanners)
+    {
+        if (noise_pub)
+            s->setNoiseMapCallback(
+                [p = noise_pub.get()](const acq::NoiseMap& m)
+                {
+                    p->publish(m);
+                });
         s->start();
+    }
 
     // ── P25 grant consumer — retune to voice channel on grant ─────────────
     // Reads rf.p25.grants; for each whitelisted TG, submits a priority
@@ -391,6 +419,7 @@ int main(int argc, char* argv[])
     for (auto& s : scanners)
         s->stop();
     gps_cache.reset();
+    noise_pub.reset();
     amqp.reset();
     db.reset();
     spdlog::info("Shutdown complete");
