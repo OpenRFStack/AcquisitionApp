@@ -342,6 +342,50 @@ TEST(AuditAcq, Acq13_RasterCarrierConfirmsOnTheSecondSweep)
     EXPECT_EQ(hits_at.size(), 5u);  // dwells 2..6
 }
 
+// ACQ-15: the persistence bypass for strong signals looked at PAPR only; a
+// flat-topped emission 37 dB over the floor still waited for a second sweep.
+TEST(AuditAcq, Acq15_StrongFlatEmissionEmitsOnTheFirstSweep)
+{
+    SweepConfig cfg;
+    cfg.device.rx_channels     = 1;
+    cfg.device.sample_rate     = au::hertz(10e6);
+    cfg.sweep.fft_size         = 4096;
+    cfg.sweep.min_signal_bw_hz = au::hertz(2500.0);
+    Dwell d;
+    d.center_hz      = au::hertz(100e6);
+    d.sample_rate_hz = 10e6;
+    d.ch_samples     = {wideband(32'768, 2e6 / 10e6, 200e3 / 10e6, 20.f, 3)};
+    AlternatingSource src(d, d);
+    std::mutex        mu;
+    std::vector<int>  hits_at;
+    double            snr = 0, floor = 0;
+    SpectrumScanner   sc(cfg,
+                       &src,
+                       [&](const Detection& det)
+                       {
+                           std::lock_guard lk(mu);
+                           if (std::abs(det.center_freq_hz.in(au::hertz)-102e6) < 20e3)
+                           {
+                               hits_at.push_back(src.n_.load());
+                               snr   = det.snr_db;
+                               floor = det.noise_floor_db;
+                           }
+                       });
+    sc.start();
+    for (int i = 0; i < 400 && src.n_.load() < 6; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    sc.stop();
+    std::lock_guard lk(mu);
+    ASSERT_FALSE(hits_at.empty());
+    std::printf("ACQ-15: first detection on dwell %d, SNR %.1f dB, floor %.1f dBFS\n",
+                hits_at.front(),
+                snr,
+                floor);
+    EXPECT_EQ(hits_at.front(), 1);
+    EXPECT_GT(snr, 25.0);
+}
+
 /*
 ========================================================================
 End of file — OpenRFStack

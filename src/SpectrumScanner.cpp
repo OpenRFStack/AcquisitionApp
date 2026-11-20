@@ -222,7 +222,8 @@ SpectrumScanner::processDwell(int                                     ch,
 
     // ── Step 5: Persistence filter ────────────────────────────────────────────
     // Each candidate must be detected in ≥ PERSIST_MIN_HITS consecutive sweeps
-    // before being emitted. Strong signals (PAPR ≥ PERSIST_BYPASS_PAPR_DB) emit
+    // before being emitted. Strong signals (SNR ≥ PERSIST_BYPASS_SNR_DB or
+    // PAPR ≥ PERSIST_BYPASS_PAPR_DB) emit
     // immediately without waiting for confirmation — they're clearly real.
     auto&                        pmap = ch_persist_[ch][center_hz_raw];
     std::unordered_set<uint64_t> seen_this_dwell;
@@ -265,7 +266,11 @@ SpectrumScanner::processDwell(int                                     ch,
         pe.misses  = 0;
         pe.peak_db = std::max(pe.peak_db, s.peak_db);
 
-        bool strong  = (s.peak_db - s.mean_db) >= PERSIST_BYPASS_PAPR_DB;
+        // Strong = well above the floor (FM broadcast, LTE …). It used to be
+        // judged by PAPR alone, which a flat-topped emission never reaches at
+        // any level, so a strong LTE carrier waited for confirmation (ACQ-15).
+        bool strong = (s.peak_db - s.noise_db) >= PERSIST_BYPASS_SNR_DB
+                      || (s.peak_db - s.mean_db) >= PERSIST_BYPASS_PAPR_DB;
         bool confirm = pe.hits >= PERSIST_MIN_HITS;
         if (!strong && !confirm)
             continue;  // first-hit noise candidate: skip

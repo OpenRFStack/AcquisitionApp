@@ -23,8 +23,8 @@ Contact author for permission: https://github.com/OpenRFStack
  * A candidate detection must appear within ±PERSIST_FREQ_QUANT_HZ of the
  * same persistence entry in at least PERSIST_MIN_HITS sweeps (≤
  * PERSIST_MAX_MISSES misses in between).
- * Signals with PAPR ≥ PERSIST_BYPASS_PAPR_DB (strong, obvious signals such
- * as FM broadcast or LTE) bypass persistence and emit on the first sweep.
+ * Signals with SNR ≥ PERSIST_BYPASS_SNR_DB or PAPR ≥ PERSIST_BYPASS_PAPR_DB (strong, obvious
+ * signals such as FM broadcast or LTE) bypass persistence and emit on the first sweep.
  *
  * ## Noise floor
  * Each dwell's floor comes from a NoiseFloorEstimator (<noise_floor>): per
@@ -113,6 +113,8 @@ private:
     static constexpr int PERSIST_MAX_MISSES = 4;
     /// Signals with PAPR ≥ this threshold bypass persistence (emit on first sweep).
     static constexpr float PERSIST_BYPASS_PAPR_DB = 15.0f;
+    /// … or SNR ≥ this (peak above the estimated floor).
+    static constexpr float PERSIST_BYPASS_SNR_DB = 25.0f;
 
     void sweepLoop();
 
