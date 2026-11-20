@@ -259,6 +259,29 @@ TEST(ScanDwell, RoundsUpSoTheDwellHoldsEnoughSamples)
     EXPECT_GE(scanDwellMs(131'072, 2.4e6) * 2.4e6 / 1000.0, 131072.0);
 }
 
+// ACQ-14: <settle_samples> was parsed and never applied. The first samples
+// after every retune (and at stream start) are dropped from the dwell.
+TEST(DwellAssembler, SettleSamplesAreDroppedAfterEachRetune)
+{
+    DwellAssembler a(1, 200, 100);
+    Dwell          d;
+    // entry 1: 128 transient (value 9) then steady (value 1)
+    feed(a, pkt(0, 100'000'000, 100, 9.f, sdr::IQ_FLAG_FIRST_PACKET), d);
+    feed(a, pkt(1, 100'000'000, 128, 1.f), d);
+    ASSERT_TRUE(feed(a, pkt(2, 100'000'000, 128, 1.f), d));
+    ASSERT_EQ(d.ch_samples[0].size(), 200u);
+    for (auto& v : d.ch_samples[0])
+        ASSERT_EQ(v.real(), 1.f) << "stream-start transient in the dwell";
+    // entry 2 after a retune
+    feed(a, pkt(3, 108'000'000, 100, 9.f, sdr::IQ_FLAG_DWELL_CHANGE), d);
+    feed(a, pkt(4, 108'000'000, 128, 2.f), d);
+    ASSERT_TRUE(feed(a, pkt(5, 108'000'000, 128, 2.f), d));
+    EXPECT_DOUBLE_EQ(d.center_hz.in(au::hertz), 108e6);
+    for (auto& v : d.ch_samples[0])
+        ASSERT_EQ(v.real(), 2.f) << "post-retune transient in the dwell";
+    EXPECT_EQ(a.stats().settled_samples, 200u);
+}
+
 /*
 ========================================================================
 End of file — OpenRFStack

@@ -317,7 +317,7 @@ TaskManagerIqSource::TaskManagerIqSource(const SweepConfig& cfg,
     : cfg_(cfg)
     , preferred_device_(std::move(preferred_device))
     , device_required_(device_required)
-    , assembler_(cfg.device.rx_channels, cfg.sweep.dwell_samples)
+    , assembler_(cfg.device.rx_channels, cfg.sweep.dwell_samples, cfg.sweep.settle_samples)
     , resume_hz_(cfg.sweep.start_hz)
 {
     pkt_buf_.resize(65'536);

@@ -69,11 +69,15 @@ public:
         uint64_t discarded_samples = 0;  ///< samples thrown away to avoid splicing
         uint64_t malformed         = 0;  ///< short / bad-magic / truncated datagrams
         uint64_t skipped_samples   = 0;  ///< beyond dwell_samples within one scan entry
+        uint64_t settled_samples   = 0;  ///< dropped after a retune (settle_samples)
     };
 
-    DwellAssembler(int channels, int dwell_samples)
+    /// @param settle_samples dropped per channel at the start of every dwell
+    ///        (after each retune), before accumulating — <settle_samples>.
+    DwellAssembler(int channels, int dwell_samples, int settle_samples = 0)
         : channels_(channels < 1 ? 1 : channels)
         , dwell_samples_(dwell_samples)
+        , settle_samples_(settle_samples < 0 ? 0 : settle_samples)
     {
         reset();
     }
@@ -85,6 +89,7 @@ public:
         sample_rate_hz_ = 0.0;
         complete_       = false;
         last_seq_.assign((size_t)channels_, -1);
+        settle_left_.assign((size_t)channels_, settle_samples_);
     }
 
     /// Feed one datagram. Returns true and fills @p out when a dwell completes.
@@ -162,6 +167,8 @@ public:
         }
         if (center_hz_ == 0.0 || flag_restart || cf_changed)
         {
+            if (center_hz_ != 0.0)  // a retune: the new dwell settles first
+                settle_left_.assign((size_t)channels_, settle_samples_);
             center_hz_      = cf;
             sample_rate_hz_ = (double)hdr.sample_rate;
         }
@@ -202,11 +209,13 @@ public:
     }
 
 private:
-    int    channels_;
-    int    dwell_samples_;
-    double center_hz_      = 0.0;
-    double sample_rate_hz_ = 0.0;
-    bool   complete_       = false;  ///< current entry's dwell already emitted
+    int              channels_;
+    int              dwell_samples_;
+    int              settle_samples_;
+    std::vector<int> settle_left_;  ///< per channel, still to drop in this dwell
+    double           center_hz_      = 0.0;
+    double           sample_rate_hz_ = 0.0;
+    bool             complete_       = false;  ///< current entry's dwell already emitted
     std::vector<std::vector<std::complex<float>>> accum_;
     std::vector<char>    seen_;  ///< channel delivered a packet in this dwell
     std::vector<int64_t> last_seq_;
@@ -240,6 +249,18 @@ private:
     {
         if (n == 0 || ch < 0 || ch >= channels_)
             return;
+        // Post-retune transient (AGC, DC-offset tracking): the setting used
+        // to be parsed and never applied (ACQ-14).
+        if (int& left = settle_left_[(size_t)ch]; left > 0)
+        {
+            const size_t drop = std::min(n, (size_t)left);
+            left -= (int)drop;
+            stats_.settled_samples += drop;
+            s += drop;
+            n -= drop;
+            if (n == 0)
+                return;
+        }
         auto&        b    = accum_[(size_t)ch];
         const size_t room = dwell_samples_ > (int)b.size() ? (size_t)dwell_samples_ - b.size() : 0;
         if (n > room)
