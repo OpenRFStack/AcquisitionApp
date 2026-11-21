@@ -12,6 +12,9 @@ Contact author for permission: https://github.com/OpenRFStack
 */
 #include "FftProcessor.hpp"
 
+#include <spdlog/spdlog.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -22,9 +25,6 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <stdexcept>
 #include <string>
 #include <utility>
-
-#include <spdlog/spdlog.h>
-#include <unistd.h>
 
 #include <au/units/hertz.hh>
 
@@ -77,8 +77,7 @@ fftwf_plan planForward(int n, fftwf_complex* in, fftwf_complex* out)
         if (!fftwf_import_wisdom_from_filename(path.c_str()))
             spdlog::debug("[FftProcessor] no FFTW wisdom at {}", path);
     }
-    if (fftwf_plan p
-        = fftwf_plan_dft_1d(n, in, out, FFTW_FORWARD, FFTW_PATIENT | FFTW_WISDOM_ONLY))
+    if (fftwf_plan p = fftwf_plan_dft_1d(n, in, out, FFTW_FORWARD, FFTW_PATIENT | FFTW_WISDOM_ONLY))
         return p;
 
     static bool warned  = false;
@@ -89,17 +88,15 @@ fftwf_plan planForward(int n, fftwf_complex* in, fftwf_complex* out)
                      path,
                      n);
     const auto t0 = std::chrono::steady_clock::now();
-    fftwf_plan p
-        = fftwf_plan_dft_1d(n, in, out, FFTW_FORWARD, persist ? FFTW_PATIENT : FFTW_MEASURE);
-    const double ms
-        = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    fftwf_plan p =
+        fftwf_plan_dft_1d(n, in, out, FFTW_FORWARD, persist ? FFTW_PATIENT : FFTW_MEASURE);
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     if (persist)
     {
         if (fftwf_export_wisdom_to_filename(path.c_str()))
-            spdlog::info("[FftProcessor] planned {}-pt FFT in {:.0f} ms, wisdom saved to {}",
-                         n,
-                         ms,
-                         path);
+            spdlog::info(
+                "[FftProcessor] planned {}-pt FFT in {:.0f} ms, wisdom saved to {}", n, ms, path);
         else
             spdlog::warn("[FftProcessor] could not write FFTW wisdom to {}", path);
     }
@@ -164,13 +161,21 @@ FftProcessor::~FftProcessor()
 // ── Single frame: DC-remove + window + FFT + accumulate ──────────────────────
 void FftProcessor::accumFrame(const std::complex<float>* src)
 {
-    // Pass 1: DC mean — separate re/im for better auto-vectorization.
-    const float* s      = reinterpret_cast<const float*>(src);
-    float        sum_re = 0.f, sum_im = 0.f;
-    for (int i = 0; i < fft_size_; ++i)
+    // Pass 1: DC mean. A single running sum is one serial dependency chain:
+    // without -ffast-math the compiler may not reorder it, so it ran as
+    // scalar addss at one add per FP-add latency (~60 % of the frame time
+    // outside the FFT). 16 fixed lanes (even = re, odd = im) vectorise
+    // without changing semantics between builds, and round better.
+    const float* s = reinterpret_cast<const float*>(src);
+    float        lane[16]{};
+    for (int i = 0; i < 2 * fft_size_; i += 16)  // fft_size_ >= 64: multiple of 16 floats
+        for (int j = 0; j < 16; ++j)
+            lane[j] += s[i + j];
+    float sum_re = 0.f, sum_im = 0.f;
+    for (int j = 0; j < 16; j += 2)
     {
-        sum_re += s[2 * i];
-        sum_im += s[2 * i + 1];
+        sum_re += lane[j];
+        sum_im += lane[j + 1];
     }
     const float mean_re = sum_re / (float)fft_size_;
     const float mean_im = sum_im / (float)fft_size_;
