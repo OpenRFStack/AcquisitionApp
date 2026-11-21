@@ -337,7 +337,16 @@ FftProcessor::detectFromSpectrum(float                     threshold_db,
             // the floor has peak ≈ mean and used to be dropped (ACQ-11).
             const float run_noise = noise_sum / (float)count;
             const bool  marginal  = mean < run_noise + threshold_db + 3.f;
-            if (width < 2 || !marginal || peak - mean >= min_papr_db)
+            // With a 1-bin minimum width a lone bin over the threshold is
+            // accepted ungated, but a 2-4 bin run (the Blackman-Harris main
+            // lobe of a CW carrier near the threshold, < 3 dB peak-to-mean)
+            // was a "flat marginal bump" and dropped: a carrier a few dB
+            // stronger than the weakest one reported was almost never
+            // reported (ACQ-20). With a wider minimum the gate is the
+            // intended filter for correlated noise clumps and stays.
+            static constexpr int kMainLobeBins = 4;
+            const bool           tonal         = min_bins == 1 && width <= kMainLobeBins;
+            if (width < 2 || tonal || !marginal || peak - mean >= min_papr_db)
             {
                 float center_bin_f = (float)peak_bin_abs;
                 // A wide run's peak is just its highest ripple — anywhere in

@@ -120,15 +120,17 @@ private:
     /// Persistence filter state: track hit/miss counts per (channel, centre_hz, freq).
     struct PersistEntry
     {
-        int   hits{0};          ///< Consecutive sweeps the signal was detected.
-        int   misses{0};        ///< Consecutive sweeps the signal was absent.
-        float peak_db{-300.f};  ///< Highest observed peak power (dBFS).
+        int      hits{0};          ///< Consecutive sweeps the signal was detected.
+        int      misses{0};        ///< Consecutive sweeps the signal was absent.
+        float    peak_db{-300.f};  ///< Highest observed peak power (dBFS).
+        uint64_t lo{0}, hi{0};     ///< Extent (Hz) of the last hit — matching is by overlap.
     };
 
     std::vector<std::unordered_map<uint64_t, std::unordered_map<uint64_t, PersistEntry>>>
         ch_persist_;
 
-    /// A detection matches the nearest persistence entry within this distance.
+    /// A detection matches the nearest persistence entry whose last extent it
+    /// overlaps (±1 FFT bin), and never one further than this.
     /// Wide enough to tolerate sub-bin interpolation jitter across sweeps.
     static constexpr uint64_t PERSIST_FREQ_QUANT_HZ = 10'000;
     /// Minimum confirmed hits before a detection callback fires.

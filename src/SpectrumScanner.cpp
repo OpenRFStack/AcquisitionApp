@@ -250,12 +250,18 @@ SpectrumScanner::processDwell(int                                     ch,
         // floor(fc / 10 kHz) buckets split every signal on a 10/12.5/25 kHz
         // channel raster in two: sub-bin jitter around the raster frequency
         // alternated between neighbouring buckets (ACQ-13).
-        uint64_t key  = fc;
-        uint64_t best = PERSIST_FREQ_QUANT_HZ + 1;
+        // Only an entry this run overlaps (±1 bin) counts as the same
+        // emission: any entry within ±10 kHz used to (±4 bins at 10 MS/s /
+        // 4096, ±41 at 1 MS/s), so noise crossings confirmed each other —
+        // about one false detection per dwell (ACQ-20).
+        const uint64_t pad  = (uint64_t)std::llround(sample_rate.in(au::hertz) / proc.fft_size());
+        uint64_t       key  = fc;
+        uint64_t       best = PERSIST_FREQ_QUANT_HZ + 1;
         for (const auto& [k, e] : pmap)
         {
-            const uint64_t dist = k > fc ? k - fc : fc - k;
-            if (dist < best && !seen_this_dwell.count(k))
+            const uint64_t dist    = k > fc ? k - fc : fc - k;
+            const bool     overlap = f_lo <= e.hi + pad && f_hi + pad >= e.lo;
+            if (overlap && dist < best && !seen_this_dwell.count(k))
             {
                 best = dist;
                 key  = k;
@@ -269,6 +275,8 @@ SpectrumScanner::processDwell(int                                     ch,
         auto& pe = pmap[key];
         ++pe.hits;
         pe.misses  = 0;
+        pe.lo      = f_lo;
+        pe.hi      = f_hi;
         pe.peak_db = std::max(pe.peak_db, s.peak_db);
 
         // Strong = well above the floor (FM broadcast, LTE …). It used to be

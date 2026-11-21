@@ -23,6 +23,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <random>
 #include <set>
 #include <thread>
 
@@ -445,6 +446,149 @@ TEST(AuditAcq, NoiseMapReportsPersistentCarrierWithoutRaisingTheFloor)
     EXPECT_GT(m.quiet_db[(size_t)carrier], med_floor + 20.f);
     EXPECT_FLOAT_EQ(m.occupancy[(size_t)carrier], 1.f);
     EXPECT_LT(m.occupancy[(size_t)((carrier + 20) % 64)], 0.5f);
+}
+
+// ── Persistence false-alarm rate (ACQ-20) ─────────────────────────────────────
+// Fresh complex noise every dwell (one-entry repeating scan at 10 MS/s,
+// 4096-pt, 65 536-sample dwells: the production defaults), optionally with a
+// weak CW carrier. Reports false detections per dwell and the fraction of
+// dwells that report the carrier.
+namespace
+{
+class NoiseSource : public IqSource
+{
+public:
+    NoiseSource(int dwells, double tone_off_hz, float tone_amp)
+        : left_(dwells)
+        , off_(tone_off_hz)
+        , amp_(tone_amp)
+    {
+    }
+
+    void open() override
+    {
+        running_ = true;
+    }
+
+    void close() override
+    {
+    }
+
+    void stop() override
+    {
+        running_ = false;
+    }
+
+    bool next(Dwell& d) override
+    {
+        if (!running_ || left_ <= 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            return false;
+        }
+        --left_;
+        d.center_hz      = au::hertz(100e6);
+        d.sample_rate_hz = 10e6;
+        std::vector<std::complex<float>> v(65'536);
+        std::normal_distribution<float>  n(0.f, 0.01f);
+        const double                     w = 2 * M_PI * off_ / 10e6;
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+            v[i] = {n(g_), n(g_)};
+            if (amp_ > 0.f)
+            {
+                v[i] += std::polar(amp_, (float)std::fmod(phase_, 2 * M_PI));
+                phase_ += w;
+            }
+        }
+        d.ch_samples = {std::move(v)};
+        ++done_;
+        return true;
+    }
+
+    int numChannels() const override
+    {
+        return 1;
+    }
+
+    std::atomic<int> done_{0};
+
+private:
+    std::atomic<int>  left_;
+    double            off_;
+    float             amp_;
+    double            phase_ = 0.0;
+    std::mt19937      g_{4242};
+    std::atomic<bool> running_{false};
+};
+
+struct PersistStats
+{
+    double false_per_dwell;
+    double carrier_dwell_fraction;
+};
+
+PersistStats runPersistence(int dwells, float tone_amp, double min_bw_hz = 500.0)
+{
+    SweepConfig cfg;
+    cfg.device.rx_channels     = 1;
+    cfg.device.sample_rate     = au::hertz(10e6);
+    cfg.sweep.fft_size         = 4096;
+    cfg.sweep.dwell_samples    = 65'536;
+    cfg.sweep.min_signal_bw_hz = au::hertz(min_bw_hz);
+    const double    tone_off   = 1.234e6;
+    NoiseSource     src(dwells, tone_off, tone_amp);
+    std::mutex      mu;
+    int             false_n = 0;
+    std::set<int>   tone_dwells;
+    SpectrumScanner sc(cfg,
+                       &src,
+                       [&](const Detection& det)
+                       {
+                           std::lock_guard lk(mu);
+                           if (tone_amp > 0.f
+                               && std::abs(det.center_freq_hz.in(au::hertz) - (100e6 + tone_off))
+                                      < 20e3)
+                               tone_dwells.insert(src.done_.load());
+                           else
+                               ++false_n;
+                       });
+    sc.start();
+    for (int i = 0; i < 6000 && src.done_.load() < dwells; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    sc.stop();
+    std::lock_guard lk(mu);
+    return {(double)false_n / dwells, (double)tone_dwells.size() / dwells};
+}
+}  // namespace
+
+TEST(AuditAcq, Acq20_PersistenceFalseAlarmRate)
+{
+    const float levels[] = {0.00024f, 0.00034f, 0.00048f, 0.00085f};
+    for (double min_bw : {500.0, 2500.0})  // 1-bin and the production 2-bin minimum
+    {
+        const auto noise = runPersistence(100, 0.f, min_bw);
+        std::printf("ACQ-20 min_bw %.0f Hz: noise only: %.2f false detections per dwell\n",
+                    min_bw,
+                    noise.false_per_dwell);
+        double prev = 0.0;
+        for (float a : levels)
+        {
+            const auto w = runPersistence(100, a, min_bw);
+            std::printf("ACQ-20 min_bw %.0f Hz: carrier %.1f dB: reported in %.0f %% of dwells\n",
+                        min_bw,
+                        20 * std::log10(a / 0.01414f),
+                        100 * w.carrier_dwell_fraction);
+            // A stronger carrier must not be reported less often (it was:
+            // 11 % at -33.5 dB, 1 % at -31 dB with a 1-bin minimum).
+            EXPECT_GE(w.carrier_dwell_fraction, prev - 0.10) << "level " << a;
+            prev = std::max(prev, w.carrier_dwell_fraction);
+            if (min_bw < 1000.0 && a == 0.00034f)  // -32.4 dB: 3 % before ACQ-20
+                EXPECT_GE(w.carrier_dwell_fraction, 0.8);
+        }
+        EXPECT_LT(noise.false_per_dwell, min_bw < 1000.0 ? 0.8 : 0.3);
+    }
 }
 
 /*
