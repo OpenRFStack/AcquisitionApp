@@ -13,17 +13,100 @@ Contact author for permission: https://github.com/OpenRFStack
 #include "FftProcessor.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
+#include <string>
+#include <utility>
+
+#include <spdlog/spdlog.h>
+#include <unistd.h>
 
 #include <au/units/hertz.hh>
 
 namespace acq
 {
 
-static constexpr const char* WISDOM_FILE = "/var/cache/sdr-acquisition/fftw_wisdom.txt";
+static constexpr const char* DEFAULT_WISDOM_FILE = "/var/cache/sdr-acquisition/fftw_wisdom.txt";
+
+namespace
+{
+
+// The FFTW planner (plan creation and destruction, wisdom import/export) is
+// not thread-safe; P25 voice scanners are built on the grant worker thread.
+std::mutex& plannerMutex()
+{
+    static std::mutex mu;
+    return mu;
+}
+
+std::string wisdomPath()
+{
+    const char* env = std::getenv("SDR_FFTW_WISDOM");
+    return env && *env ? env : DEFAULT_WISDOM_FILE;
+}
+
+bool wisdomWritable(const std::string& path)
+{
+    if (::access(path.c_str(), W_OK) == 0)
+        return true;
+    const auto slash = path.find_last_of('/');
+    const auto dir   = slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+    return ::access(dir.c_str(), W_OK) == 0;
+}
+
+/// Plan an n-point forward FFT. Planner mutex must be held.
+///
+/// FFTW_PATIENT only pays off at large sizes (E5-2650L v4: 4096-pt 9.83 vs
+/// 9.88 us/FFT against MEASURE, 16384-pt 52 vs 69 us) and costs seconds to
+/// plan (0.9 / 2.0 / 6.2 s at 1024 / 4096 / 16384), so it is used only when
+/// the result can be stored. Without a writable wisdom file (an RPM install
+/// with no cache directory) every start re-ran PATIENT planning; it now
+/// falls back to FFTW_MEASURE (0.09 / 0.16 / 0.42 s).
+fftwf_plan planForward(int n, fftwf_complex* in, fftwf_complex* out)
+{
+    static bool loaded = false;
+    const auto  path   = wisdomPath();
+    if (!loaded)
+    {
+        loaded = true;  // once per process: wisdom stays in memory
+        if (!fftwf_import_wisdom_from_filename(path.c_str()))
+            spdlog::debug("[FftProcessor] no FFTW wisdom at {}", path);
+    }
+    if (fftwf_plan p
+        = fftwf_plan_dft_1d(n, in, out, FFTW_FORWARD, FFTW_PATIENT | FFTW_WISDOM_ONLY))
+        return p;
+
+    static bool warned  = false;
+    const bool  persist = wisdomWritable(path);
+    if (!persist && !std::exchange(warned, true))
+        spdlog::warn("[FftProcessor] FFTW wisdom file {} not writable: planning {}-pt with "
+                     "FFTW_MEASURE (set SDR_FFTW_WISDOM or create the directory)",
+                     path,
+                     n);
+    const auto t0 = std::chrono::steady_clock::now();
+    fftwf_plan p
+        = fftwf_plan_dft_1d(n, in, out, FFTW_FORWARD, persist ? FFTW_PATIENT : FFTW_MEASURE);
+    const double ms
+        = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (persist)
+    {
+        if (fftwf_export_wisdom_to_filename(path.c_str()))
+            spdlog::info("[FftProcessor] planned {}-pt FFT in {:.0f} ms, wisdom saved to {}",
+                         n,
+                         ms,
+                         path);
+        else
+            spdlog::warn("[FftProcessor] could not write FFTW wisdom to {}", path);
+    }
+    return p;
+}
+
+}  // namespace
 
 FftProcessor::FftProcessor(int fft_size, int cfar_guard, int cfar_ref)
     : fft_size_(fft_size)
@@ -36,13 +119,12 @@ FftProcessor::FftProcessor(int fft_size, int cfar_guard, int cfar_ref)
     in_  = fftwf_alloc_complex((size_t)fft_size);
     out_ = fftwf_alloc_complex((size_t)fft_size);
 
-    // FFTW_PATIENT benchmarks more candidate algorithms than FFTW_MEASURE and
-    // consistently finds faster plans for this size/machine. The planning overhead
-    // is paid once and stored in the wisdom file; subsequent starts load instantly.
-    fftwf_import_wisdom_from_filename(WISDOM_FILE);
-    plan_ = fftwf_plan_dft_1d(
-        fft_size, (fftwf_complex*)in_, (fftwf_complex*)out_, FFTW_FORWARD, FFTW_PATIENT);
-    fftwf_export_wisdom_to_filename(WISDOM_FILE);
+    {
+        std::lock_guard lk(plannerMutex());
+        plan_ = planForward(fft_size, (fftwf_complex*)in_, (fftwf_complex*)out_);
+    }
+    if (!plan_)
+        throw std::runtime_error("FFTW planning failed");
 
     // Blackman-Harris 4-term: ~92 dB sidelobe rejection.
     window_.resize((size_t)fft_size);
@@ -69,7 +151,10 @@ FftProcessor::FftProcessor(int fft_size, int cfar_guard, int cfar_ref)
 FftProcessor::~FftProcessor()
 {
     if (plan_)
+    {
+        std::lock_guard lk(plannerMutex());
         fftwf_destroy_plan(plan_);
+    }
     if (in_)
         fftwf_free(in_);
     if (out_)

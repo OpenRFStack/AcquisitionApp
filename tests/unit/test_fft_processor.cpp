@@ -13,8 +13,13 @@ Contact author for permission: https://github.com/OpenRFStack
 #include "FftProcessor.hpp"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <cmath>
 #include <complex>
 #include <random>
@@ -500,6 +505,68 @@ TEST(FftProcessor, DetectIsIdempotent)
         EXPECT_EQ(s1[i].start_bin, s2[i].start_bin);
         EXPECT_EQ(s1[i].end_bin, s2[i].end_bin);
     }
+}
+
+// ── FFTW wisdom (each case in a fresh child process: wisdom is per process) ──
+
+namespace
+{
+double constructMs(int n)
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    acq::FftProcessor p(n, 4, 16);
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+        .count();
+}
+}  // namespace
+
+// No writable wisdom file (RPM unit without a cache directory): planning used
+// FFTW_PATIENT on every start (4096-pt ~2 s); now FFTW_MEASURE (~0.2 s).
+TEST(FftProcessorWisdom, UnwritableWisdomPathDoesNotPlanPatient)
+{
+    GTEST_FLAG_SET(death_test_style, "fast");  // fork: the child must not re-run the body
+    EXPECT_EXIT(
+        {
+            setenv("SDR_FFTW_WISDOM", "/proc/no-such-dir/fftw_wisdom.txt", 1);
+            const double ms = constructMs(4096);
+            std::fprintf(stderr, "unwritable wisdom: 4096-pt plan %.0f ms\n", ms);
+            std::exit(ms < 1000.0 ? 0 : 1);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+}
+
+// The wisdom file was re-read and re-written by every FftProcessor (8-9 ms
+// each, per channel and per P25 grant). A second process now loads the
+// stored plan without planning, and an in-process re-plan does no file I/O.
+TEST(FftProcessorWisdom, StoredWisdomIsReusedWithoutReplanning)
+{
+    GTEST_FLAG_SET(death_test_style, "fast");  // fork: the child must not re-run the body
+    const auto path = std::filesystem::temp_directory_path()
+                      / ("acq_wisdom_" + std::to_string(::getpid()) + ".txt");
+    std::filesystem::remove(path);
+    setenv("SDR_FFTW_WISDOM", path.c_str(), 1);
+    EXPECT_EXIT(
+        {
+            constructMs(1024);  // PATIENT, stored
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+    ASSERT_TRUE(std::filesystem::exists(path));
+    const auto mtime = std::filesystem::last_write_time(path);
+    EXPECT_EXIT(
+        {
+            const double first = constructMs(1024);
+            const double again = constructMs(1024);
+            std::fprintf(stderr, "stored wisdom: first %.2f ms, again %.2f ms\n", first, again);
+            std::exit(first < 50.0 && again < 5.0 ? 0 : 1);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+    EXPECT_EQ(std::filesystem::last_write_time(path), mtime);  // not re-written
+    unsetenv("SDR_FFTW_WISDOM");
+    std::filesystem::remove(path);
 }
 
 /*
