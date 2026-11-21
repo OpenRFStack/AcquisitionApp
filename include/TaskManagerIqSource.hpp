@@ -64,7 +64,7 @@ class container;
 namespace acq
 {
 
-class TaskAmqpChannel;  ///< Persistent AMQP request/response channel (defined in .cpp).
+class TaskAmqpChannel;  ///< Persistent AMQP request/response channel (TaskAmqpChannel.hpp).
 
 /**
  * @brief Production IqSource backed by SdrResourceManager.

@@ -16,6 +16,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include "AmqpPublisher.hpp"
 #include "GpsCache.hpp"
 #include "P25GrantConsumer.hpp"
+#include "TaskAmqpChannel.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -409,6 +410,57 @@ TEST(AmqpReconnect, ACQ16_P25GrantConsumerHasOneLinkAfterBrokerRestart)
         });
     std::printf("ACQ16 P25GrantConsumer: %d subscriber link(s) after reconnect\n", links);
     EXPECT_EQ(links, 1);
+}
+
+// TASK_STOP is fire-and-forget. While the channel reconnected, send() returned
+// without a trace, so the RM kept the task -- and its radio -- until the task
+// duration ran out. Stops are now held and sent once the links are back.
+TEST(TaskAmqpChannel, TaskStopDuringReconnectIsDelivered)
+{
+    auto      peer = std::make_unique<TestPeer>(1000);
+    const int port = peer->port();
+    ASSERT_NE(port, 0);
+    acq::TaskAmqpChannel ch(url(port), "", "", "sdr.tasks", "");
+    ch.start(3000);
+    ASSERT_TRUE(waitUntil(
+        [&]
+        {
+            return peer->linked();
+        },
+        3s));
+    ch.send(R"({"msg_type":"TASK_STOP","task_id":"a"})");
+    ASSERT_EQ(peer->waitFor(1, 2s), 1u);
+
+    peer.reset();  // broker restarts
+    std::this_thread::sleep_for(300ms);
+    ch.send(R"({"msg_type":"TASK_STOP","task_id":"b"})");
+
+    peer = std::make_unique<TestPeer>(1000, port);
+    ASSERT_EQ(peer->port(), port);
+    const size_t got = peer->waitFor(1, 8s);
+    std::printf("TASK_STOP during reconnect: %zu of 1 delivered\n", got);
+    ASSERT_EQ(got, 1u);
+    EXPECT_NE(peer->bodies()[0].find("\"b\""), std::string::npos);
+}
+
+// close() sends TASK_STOP and the channel is destroyed right after it: the
+// stop must reach the wire before the connection closes.
+TEST(TaskAmqpChannel, TaskStopRightBeforeShutdownIsDelivered)
+{
+    TestPeer peer(1000);
+    ASSERT_NE(peer.port(), 0);
+    {
+        acq::TaskAmqpChannel ch(url(peer.port()), "", "", "sdr.tasks", "");
+        ch.start(3000);
+        ASSERT_TRUE(waitUntil(
+            [&]
+            {
+                return peer.linked();
+            },
+            3s));
+        ch.send(R"({"msg_type":"TASK_STOP","task_id":"c"})");
+    }  // ~TaskAmqpChannel
+    EXPECT_EQ(peer.waitFor(1, 2s), 1u);
 }
 
 /*
