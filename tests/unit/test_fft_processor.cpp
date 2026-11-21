@@ -17,11 +17,11 @@ Contact author for permission: https://github.com/OpenRFStack
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <complex>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <cmath>
-#include <complex>
 #include <random>
 #include <vector>
 
@@ -513,10 +513,9 @@ namespace
 {
 double constructMs(int n)
 {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto        t0 = std::chrono::steady_clock::now();
     acq::FftProcessor p(n, 4, 16);
-    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
-        .count();
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 }  // namespace
 

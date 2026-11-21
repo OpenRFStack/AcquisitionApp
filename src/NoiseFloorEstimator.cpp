@@ -112,8 +112,8 @@ const DspNoiseFloor::Bias& DspNoiseFloor::bias(int n_frames, int block_bins)
     // n bins shrinks as 1/√n, so large blocks need fewer trials for the same
     // precision — the band-wide table (thousands of bins) was 10 M draws on
     // the sweep thread.
-    const int trials = std::clamp(200 * 64 / std::max(1, block_bins), 24, 200);
-    std::vector<float>              blk((size_t)block_bins);
+    const int          trials = std::clamp(200 * 64 / std::max(1, block_bins), 24, 200);
+    std::vector<float> blk((size_t)block_bins);
     std::vector<std::vector<float>> est((size_t)trials, std::vector<float>((size_t)cfg_.history));
     double                          sum = 0.0;
     for (int t = 0; t < trials; ++t)
