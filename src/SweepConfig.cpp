@@ -366,28 +366,54 @@ SweepConfig SweepConfig::from_file(const std::string& path)
 
 std::vector<BandConfig> SweepConfig::splitBands(const std::vector<BandConfig>& bands, int n_devices)
 {
-    if (n_devices <= static_cast<int>(bands.size()))
+    const int nb = static_cast<int>(bands.size());
+    if (n_devices <= nb)
         return bands;
+
+    // Spare devices go to the band whose slices are currently widest: the
+    // widest slice sets the worst-case revisit time. They used to be dealt
+    // out by band count (100 MHz + 1 GHz on 4 devices -> 2 x 50 + 2 x 500 MHz
+    // slices; now 100 + 3 x 333 MHz). A band pinned to a device
+    // (device_required) is never split: every slice would need that one
+    // device and they would only queue behind each other on it.
+    std::vector<int> pieces(static_cast<size_t>(nb), 1);
+    auto             width = [&](int i)
+    {
+        return bands[(size_t)i].stop_hz.in(au::hertz)-bands[(size_t)i].start_hz.in(au::hertz);
+    };
+    for (int extra = n_devices - nb; extra > 0; --extra)
+    {
+        int    best   = -1;
+        double best_w = 0.0;
+        for (int i = 0; i < nb; ++i)
+        {
+            if (bands[(size_t)i].device_required)
+                continue;
+            const double w = width(i) / pieces[(size_t)i];
+            if (w > best_w)  // strict: ties go to the earlier band
+            {
+                best   = i;
+                best_w = w;
+            }
+        }
+        if (best < 0)
+            break;  // every band pinned
+        ++pieces[(size_t)best];
+    }
 
     std::vector<BandConfig> out;
     out.reserve(static_cast<size_t>(n_devices));
-    const int nb        = static_cast<int>(bands.size());
-    const int base      = n_devices / nb;
-    const int remainder = n_devices % nb;
-
     for (int i = 0; i < nb; ++i)
     {
-        const int    pieces = base + (i < remainder ? 1 : 0);
-        const double lo     = bands[i].start_hz.in(au::hertz);
-        const double hi     = bands[i].stop_hz.in(au::hertz);
-        const double step   = (hi - lo) / pieces;
-        for (int j = 0; j < pieces; ++j)
+        const double lo   = bands[(size_t)i].start_hz.in(au::hertz);
+        const double hi   = bands[(size_t)i].stop_hz.in(au::hertz);
+        const int    n    = pieces[(size_t)i];
+        const double step = (hi - lo) / n;
+        for (int j = 0; j < n; ++j)
         {
-            BandConfig bc;
-            bc.device_id       = bands[i].device_id;
-            bc.device_required = bands[i].device_required;
-            bc.start_hz        = au::hertz(lo + j * step);
-            bc.stop_hz         = au::hertz(lo + (j + 1) * step);
+            BandConfig bc = bands[(size_t)i];
+            bc.start_hz   = au::hertz(lo + j * step);
+            bc.stop_hz    = au::hertz(j + 1 == n ? hi : lo + (j + 1) * step);
             out.push_back(bc);
         }
     }

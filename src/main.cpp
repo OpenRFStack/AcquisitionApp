@@ -259,45 +259,15 @@ int main(int argc, char* argv[])
             const int n_dev = probe->queryDeviceCount();
             probe.reset();
 
-            const bool all_required = !effective_bands.empty()
-                                      && std::all_of(effective_bands.begin(),
-                                                     effective_bands.end(),
-                                                     [](const acq::BandConfig& b)
-                                                     {
-                                                         return b.device_required;
-                                                     });
-
-            if (!all_required && n_dev > static_cast<int>(effective_bands.size()))
-            {
-                // More devices than bands — subdivide each band into equal slices.
-                // Distribute remainder to the first bands so all devices are used.
-                //   1 band  + 4 devices → [slice0, slice1, slice2, slice3]
-                //   2 bands + 4 devices → each band → [slice0, slice1]
-                //   3 bands + 4 devices → band0 → [s0, s1],  band1 → [s0],  band2 → [s0]
-                std::vector<acq::BandConfig> split;
-                const int                    nb        = static_cast<int>(effective_bands.size());
-                const int                    base      = n_dev / nb;
-                const int                    remainder = n_dev % nb;
-                for (int i = 0; i < nb; ++i)
-                {
-                    const int    pieces = base + (i < remainder ? 1 : 0);
-                    const double lo     = effective_bands[i].start_hz.in(au::hertz);
-                    const double hi     = effective_bands[i].stop_hz.in(au::hertz);
-                    const double step   = (hi - lo) / pieces;
-                    for (int j = 0; j < pieces; ++j)
-                    {
-                        acq::BandConfig bc;
-                        bc.device_id       = effective_bands[i].device_id;
-                        bc.device_required = effective_bands[i].device_required;
-                        bc.start_hz        = au::hertz(lo + j * step);
-                        bc.stop_hz         = au::hertz(lo + (j + 1) * step);
-                        split.push_back(bc);
-                    }
-                }
-                spdlog::info(
-                    "Auto-split: {} band(s) × {} device(s) → {} slice(s)", nb, n_dev, split.size());
-                effective_bands = std::move(split);
-            }
+            // Pinned (device_required) bands are kept whole; spare devices
+            // go to the widest unpinned slices (SweepConfig::splitBands).
+            const size_t before = effective_bands.size();
+            effective_bands     = acq::SweepConfig::splitBands(effective_bands, n_dev);
+            if (effective_bands.size() != before)
+                spdlog::info("Auto-split: {} band(s) × {} device(s) → {} slice(s)",
+                             before,
+                             n_dev,
+                             effective_bands.size());
         }
 
         // Step 3: spawn one (IqSource, SpectrumScanner) per effective band.
@@ -363,7 +333,9 @@ int main(int argc, char* argv[])
 
         // Build a one-shot IQ source for voice channel captures
         // (separate from the sweep scanner sources so grants don't interrupt sweeps)
-        p25_src = std::make_unique<acq::TaskManagerIqSource>(cfg, "");
+        // At the voice-capture rank (<p25><rank>), so a grant can preempt
+        // the sweep that holds the radio.
+        p25_src = std::make_unique<acq::TaskManagerIqSource>(acq::p25SourceConfig(cfg), "");
 
         p25 = std::make_unique<acq::P25GrantConsumer>(
             cfg.amqp.url,

@@ -371,6 +371,17 @@ struct SweepConfig
     static std::vector<BandConfig> splitBands(const std::vector<BandConfig>& bands, int n_devices);
 };
 
+/// @brief Config for the P25 voice-capture IQ source: the sweep config with
+/// the voice-capture rank. The source used to be built from the sweep config
+/// as is, so voice captures went out at the sweep's rank (1) and could never
+/// preempt the sweep holding the radio; <p25><rank> was parsed, never used.
+inline SweepConfig p25SourceConfig(const SweepConfig& cfg)
+{
+    SweepConfig out = cfg;
+    out.rank        = cfg.p25.rank;
+    return out;
+}
+
 }  // namespace acq
 
 /*

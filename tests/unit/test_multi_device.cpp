@@ -23,6 +23,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <numeric>
 
@@ -175,22 +176,48 @@ TEST(SplitBands, TwoBandsTenDevices)
 
 TEST(SplitBands, ThreeBandsFourDevicesRemainder)
 {
-    // 4 / 3 = base 1, remainder 1 → band0 gets 2 slices, band1 and band2 get 1
+    // The spare device goes to the widest band (1100 MHz - 6 GHz), not the
+    // first: the widest slice sets the revisit time.
     auto result = SweepConfig::splitBands(
         {makeBand(70e6, 500e6), makeBand(500e6, 1100e6), makeBand(1100e6, 6e9)}, 4);
     ASSERT_EQ(result.size(), 4u);
     assertContiguous(result);
     assertAllPositiveWidth(result);
-    // band0 [70–500 MHz] split into 2: midpoint at 285 MHz
     EXPECT_DOUBLE_EQ(result[0].start_hz.in(au::hertz), 70e6);
-    EXPECT_DOUBLE_EQ(result[0].stop_hz.in(au::hertz), (70e6 + 500e6) / 2.0);
-    EXPECT_DOUBLE_EQ(result[1].start_hz.in(au::hertz), (70e6 + 500e6) / 2.0);
-    EXPECT_DOUBLE_EQ(result[1].stop_hz.in(au::hertz), 500e6);
-    // band1 and band2 unchanged
-    EXPECT_DOUBLE_EQ(result[2].start_hz.in(au::hertz), 500e6);
-    EXPECT_DOUBLE_EQ(result[2].stop_hz.in(au::hertz), 1100e6);
-    EXPECT_DOUBLE_EQ(result[3].start_hz.in(au::hertz), 1100e6);
+    EXPECT_DOUBLE_EQ(result[0].stop_hz.in(au::hertz), 500e6);
+    EXPECT_DOUBLE_EQ(result[1].stop_hz.in(au::hertz), 1100e6);
+    EXPECT_DOUBLE_EQ(result[2].start_hz.in(au::hertz), 1100e6);
+    EXPECT_DOUBLE_EQ(result[2].stop_hz.in(au::hertz), (1100e6 + 6e9) / 2.0);
     EXPECT_DOUBLE_EQ(result[3].stop_hz.in(au::hertz), 6e9);
+}
+
+// Worst-case slice width (revisit time) with spare devices dealt by width:
+// 100 MHz + 1 GHz on 4 devices was 2 x 50 + 2 x 500 MHz.
+TEST(SplitBands, SpareDevicesGoToTheWidestBand)
+{
+    auto   result = SweepConfig::splitBands({makeBand(100e6, 200e6), makeBand(1e9, 2e9)}, 4);
+    double widest = 0.0;
+    for (auto& s : result)
+        widest = std::max(widest, s.stop_hz.in(au::hertz)-s.start_hz.in(au::hertz));
+    ASSERT_EQ(result.size(), 4u);
+    std::printf("widest slice %.1f MHz (count-based split: 500.0 MHz)\n", widest / 1e6);
+    EXPECT_NEAR(widest, 1e9 / 3.0, 1.0);
+}
+
+// A pinned band is never split (its slices would all queue on one device);
+// the spare devices go to the unpinned bands. Mixed pinned/unpinned configs
+// used to split the pinned band too.
+TEST(SplitBands, PinnedBandIsNotSplit)
+{
+    auto pinned            = makeBand(70e6, 6e9, "g39ddc-0");
+    pinned.device_required = true;
+    auto result            = SweepConfig::splitBands({pinned, makeBand(6e9, 6.2e9)}, 4);
+    ASSERT_EQ(result.size(), 4u);
+    EXPECT_EQ(result[0].device_id, "g39ddc-0");
+    EXPECT_DOUBLE_EQ(result[0].stop_hz.in(au::hertz), 6e9);
+    for (size_t i = 1; i < result.size(); ++i)
+        EXPECT_FALSE(result[i].device_required);
+    EXPECT_EQ(SweepConfig::splitBands({pinned}, 4).size(), 1u);
 }
 
 TEST(SplitBands, FiveBandsTenDevicesEvenSplit)
@@ -234,11 +261,13 @@ TEST(SplitBands, EmptyDeviceIdRemainsEmpty)
 
 TEST(SplitBands, MixedDeviceIdsPreservedPerBand)
 {
+    // 1030 MHz and 4900 MHz bands on 4 devices: the wide band takes the
+    // spares (1 + 3 slices); each slice keeps its band's preferred device.
     auto result = SweepConfig::splitBands(
         {makeBand(70e6, 1100e6, "pluto-0"), makeBand(1100e6, 6e9, "pluto-1")}, 4);
     ASSERT_EQ(result.size(), 4u);
     EXPECT_EQ(result[0].device_id, "pluto-0");
-    EXPECT_EQ(result[1].device_id, "pluto-0");
+    EXPECT_EQ(result[1].device_id, "pluto-1");
     EXPECT_EQ(result[2].device_id, "pluto-1");
     EXPECT_EQ(result[3].device_id, "pluto-1");
 }

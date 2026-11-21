@@ -432,6 +432,22 @@ TEST_F(SweepConfigTest, ExplicitRankIsLoaded)
     EXPECT_EQ(cfg.rank, 3);
 }
 
+// The P25 voice-capture source must request at <p25><rank>, above the sweep.
+TEST_F(SweepConfigTest, P25SourceUsesTheVoiceCaptureRank)
+{
+    auto cfg = parse(R"(
+        <sdr_acquisition>
+          <device><driver>rtlsdr</driver><uri></uri></device>
+          <sweep><start_hz>100000000</start_hz><stop_hz>200000000</stop_hz></sweep>
+          <p25><enabled>true</enabled><rank>4</rank></p25>
+        </sdr_acquisition>)");
+    EXPECT_EQ(cfg.rank, 1);
+    EXPECT_EQ(cfg.p25.rank, 4);
+    EXPECT_EQ(acq::p25SourceConfig(cfg).rank, 4);
+    EXPECT_GT(acq::p25SourceConfig(acq::SweepConfig{}).rank, acq::SweepConfig{}.rank)
+        << "default voice-capture rank must outrank the default sweep";
+}
+
 /*
 ========================================================================
 End of file — OpenRFStack
