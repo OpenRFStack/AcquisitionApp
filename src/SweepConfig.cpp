@@ -206,6 +206,8 @@ SweepConfig SweepConfig::from_file(const std::string& path)
             textOrDefault(opt(amqp, "task_request_queue"), cfg.amqp.task_request_queue.c_str());
         cfg.amqp.task_response_queue =
             textOrDefault(opt(amqp, "task_response_queue"), cfg.amqp.task_response_queue.c_str());
+        cfg.amqp.status_topic =
+            textOrDefault(opt(amqp, "status_topic"), cfg.amqp.status_topic.c_str());
         if (auto* el = opt(amqp, "reconnect_interval_sec"))
             el->QueryIntText(&cfg.amqp.reconnect_interval_sec);
     }

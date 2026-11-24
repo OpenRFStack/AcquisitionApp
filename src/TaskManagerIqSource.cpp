@@ -92,7 +92,8 @@ TaskManagerIqSource::TaskManagerIqSource(const SweepConfig& cfg,
                                                  cfg_.amqp.username,
                                                  cfg_.amqp.password,
                                                  cfg_.amqp.task_request_queue,
-                                                 cfg_.amqp.task_response_queue);
+                                                 cfg_.amqp.task_response_queue,
+                                                 cfg_.amqp.status_topic);
     amqp_ch_->start(60'000);
 }
 
@@ -418,6 +419,14 @@ bool TaskManagerIqSource::next(Dwell& d)
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 no_data_ms += 100;
+                // The RM reported the task over (preempted by a higher rank,
+                // cancelled, failed) and the socket is drained: resubmit now.
+                // Waiting out STREAM_TIMEOUT_MS cost 5 s per preemption.
+                if (!task_id_.empty() && amqp_ch_->isTerminal(task_id_))
+                {
+                    spdlog::info("[TaskMgrSrc] task {} ended by the RM — re-submitting", task_id_);
+                    return false;
+                }
                 int limit = first_task_packet_ ? INITIAL_TIMEOUT_MS : STREAM_TIMEOUT_MS;
                 if (no_data_ms >= limit)
                 {

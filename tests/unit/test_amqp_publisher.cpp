@@ -35,6 +35,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -174,6 +175,30 @@ public:
         s.open();
         std::lock_guard lk(mu_);
         ++consumer_links_;
+        if (s.source().address() != "")
+            topic_senders_[s.source().address()] = s;
+    }
+
+    /// Send @p body to the consumer subscribed to @p addr (returns false if none).
+    bool publish(const std::string& addr, const std::string& body)
+    {
+        proton::work_queue* wq = nullptr;
+        {
+            std::lock_guard lk(mu_);
+            auto            it = topic_senders_.find(addr);
+            if (it == topic_senders_.end())
+                return false;
+            wq = &it->second.work_queue();
+        }
+        wq->add(
+            [this, addr, body]
+            {
+                std::lock_guard lk(mu_);
+                proton::message m;
+                m.body(body);
+                topic_senders_[addr].send(m);
+            });
+        return true;
     }
 
     int consumerLinks()
@@ -194,20 +219,21 @@ public:
     }
 
 private:
-    int                      credit_;
-    int                      want_port_;
-    std::mutex               mu_;
-    std::condition_variable  cv_;
-    int                      port_{0};
-    bool                     failed_{false};
-    int                      links_{0};
-    int                      consumer_links_{0};
-    proton::receiver         rcv_;
-    proton::work_queue*      wq_{nullptr};
-    std::vector<std::string> bodies_;
-    proton::listener         listener_;
-    proton::container        container_{*this};
-    std::thread              thread_;
+    int                                   credit_;
+    int                                   want_port_;
+    std::mutex                            mu_;
+    std::condition_variable               cv_;
+    int                                   port_{0};
+    bool                                  failed_{false};
+    int                                   links_{0};
+    int                                   consumer_links_{0};
+    proton::receiver                      rcv_;
+    std::map<std::string, proton::sender> topic_senders_;
+    proton::work_queue*                   wq_{nullptr};
+    std::vector<std::string>              bodies_;
+    proton::listener                      listener_;
+    proton::container                     container_{*this};
+    std::thread                           thread_;
 };
 
 acq::Detection detection(int seq, size_t snapshot_floats = 0)
@@ -461,6 +487,31 @@ TEST(TaskAmqpChannel, TaskStopRightBeforeShutdownIsDelivered)
         ch.send(R"({"msg_type":"TASK_STOP","task_id":"c"})");
     }  // ~TaskAmqpChannel
     EXPECT_EQ(peer.waitFor(1, 2s), 1u);
+}
+
+// A sweep preempted or cancelled by the RM ended only after 5 s of UDP
+// silence; the channel now follows the RM's status topic.
+TEST(TaskAmqpChannel, TerminalStatusFromTheStatusTopicIsSeen)
+{
+    TestPeer peer(1000);
+    ASSERT_NE(peer.port(), 0);
+    acq::TaskAmqpChannel ch(url(peer.port()), "", "", "sdr.tasks", "", "sdr.status");
+    ch.start(3000);
+    ASSERT_TRUE(waitUntil(
+        [&]
+        {
+            return peer.publish("sdr.status", R"({"task_id":"t0","state":"RUNNING"})");
+        },
+        3s));
+    peer.publish("sdr.status", R"({"task_id":"t1","state":"RUNNING"})");
+    peer.publish("sdr.status", R"({"task_id":"t1","state":"CANCELLED"})");
+    EXPECT_TRUE(waitUntil(
+        [&]
+        {
+            return ch.isTerminal("t1");
+        },
+        2s));
+    EXPECT_FALSE(ch.isTerminal("t0"));
 }
 
 /*

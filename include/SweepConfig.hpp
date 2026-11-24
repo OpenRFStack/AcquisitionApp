@@ -43,7 +43,9 @@ struct AmqpConfig
     std::string detection_topic{"rf.detections"};          ///< Topic for RF_DETECTION messages.
     std::string task_request_queue{"sdr.task.request"};    ///< Queue for outbound task requests.
     std::string task_response_queue{"sdr.task.response"};  ///< Queue for inbound task responses.
-    int         reconnect_interval_sec{5};  ///< Seconds between reconnect attempts on AMQP error.
+    std::string status_topic{
+        "sdr.status"};              ///< RM task-state topic (preempted / cancelled sweeps).
+    int reconnect_interval_sec{5};  ///< Seconds between reconnect attempts on AMQP error.
 };
 
 /// @brief PostgreSQL detection database connection parameters.

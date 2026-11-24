@@ -33,10 +33,12 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace acq
@@ -63,13 +65,25 @@ public:
                     std::string user,
                     std::string pass,
                     std::string req_queue,
-                    std::string resp_queue)
+                    std::string resp_queue,
+                    std::string status_topic = "")
         : url_(std::move(url))
         , user_(std::move(user))
         , pass_(std::move(pass))
         , req_queue_(std::move(req_queue))
         , resp_queue_(std::move(resp_queue))
+        , status_topic_(std::move(status_topic))
     {
+    }
+
+    /// True once the RM's status topic reported @p task_id in a terminal
+    /// state (COMPLETED / FAILED / CANCELLED). Lets the IQ source end a sweep
+    /// that was preempted or cancelled at once, instead of after 5 s of
+    /// silence on its UDP socket.
+    bool isTerminal(const std::string& task_id)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        return terminal_.count(task_id) != 0;
     }
 
     ~TaskAmqpChannel()
@@ -240,10 +254,22 @@ public:
         proton::receiver_options ropts;
         ropts.source(proton::source_options().dynamic(true));
         conn.open_receiver("", ropts);
+
+        // Task state changes (multicast topic), restored by proton on a
+        // reconnect like the other links.
+        if (!status_topic_.empty())
+        {
+            proton::receiver_options sropts;
+            sropts.name(status_link_name_);
+            sropts.source(proton::source_options().capabilities({proton::symbol("topic")}));
+            conn.open_receiver(status_topic_, sropts);
+        }
     }
 
     void on_receiver_open(proton::receiver& r) override
     {
+        if (r.name() == status_link_name_)
+            return;  // the status subscription, not the reply link
         reply_addr_ = r.source().address();
         spdlog::info("[TaskAmqpChannel] connected, reply_to={}", reply_addr_);
         wq_.store(&r.work_queue());
@@ -263,6 +289,11 @@ public:
     void on_message(proton::delivery& d, proton::message& msg) override
     {
         d.accept();
+        if (d.receiver().name() == status_link_name_)
+        {
+            onStatus(msg);
+            return;
+        }
         try
         {
             std::string                 b = proton::get<std::string>(msg.body());
@@ -296,6 +327,32 @@ public:
     }
 
 private:
+    void onStatus(const proton::message& msg)
+    {
+        try
+        {
+            auto       j     = nlohmann::json::parse(proton::get<std::string>(msg.body()));
+            const auto state = j.value("state", "");
+            const auto tid   = j.value("task_id", "");
+            if (tid.empty() || (state != "COMPLETED" && state != "FAILED" && state != "CANCELLED"))
+                return;
+            std::lock_guard<std::mutex> lk(mu_);
+            if (terminal_.insert(tid).second)
+            {
+                terminal_order_.push_back(tid);
+                if (terminal_order_.size() > MAX_TERMINAL)  // every task of the RM passes by
+                {
+                    terminal_.erase(terminal_order_.front());
+                    terminal_order_.pop_front();
+                }
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+
+    static constexpr size_t MAX_TERMINAL  = 4096;
     static constexpr size_t MAX_HELD      = 64;
     static constexpr int    STOP_GRACE_MS = 3000;
 
@@ -310,7 +367,10 @@ private:
         sender_.send(msg);
     }
 
-    std::string url_, user_, pass_, req_queue_, resp_queue_;
+    std::string                     url_, user_, pass_, req_queue_, resp_queue_, status_topic_;
+    const std::string               status_link_name_{"acq-task-status"};
+    std::unordered_set<std::string> terminal_;        ///< (mu_)
+    std::deque<std::string>         terminal_order_;  ///< eviction order (mu_)
 
     std::unique_ptr<proton::container> container_;
     std::thread                        thread_;
