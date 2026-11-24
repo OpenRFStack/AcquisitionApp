@@ -248,33 +248,58 @@ inline int effectiveDwellSamples(const SweepParams& sw, double sample_rate_sps)
 }
 
 /**
+ * @brief The fixed entry grid of a sweep (ACQ-06, ACQ-24).
+ *
+ * n = ceil(span / step) windows: centre_k = start + (k + ½)·step for
+ * k < n − 1, and the last window ends exactly at @p stop_hz (centre
+ * stop − ½·step, overlapping its neighbour). Every centre stays inside the
+ * band. The grid used to keep only centres ≤ stop, so the top of every band
+ * was never scanned: up to one step (88–108 MHz at 2.048 MS/s: 107.66–108).
+ * A span no wider than one step (e.g. a 12.5 kHz P25 voice channel) is one
+ * entry at the span centre.
+ */
+inline std::vector<double> scanGrid(double start_hz, double stop_hz, double step_hz)
+{
+    const double span = stop_hz - start_hz;
+    if (step_hz <= 0.0 || span <= step_hz)
+        return {0.5 * (start_hz + stop_hz)};
+    const int           n = (int)std::ceil(span / step_hz - 1e-9);
+    std::vector<double> grid;
+    grid.reserve((size_t)n);
+    for (int k = 0; k + 1 < n; ++k)
+        grid.push_back(start_hz + (k + 0.5) * step_hz);
+    grid.push_back(stop_hz - 0.5 * step_hz);
+    return grid;
+}
+
+/// Index of the grid entry nearest @p hz.
+inline size_t nearestGridIndex(const std::vector<double>& grid, double hz)
+{
+    size_t best = 0;
+    for (size_t i = 1; i < grid.size(); ++i)
+        if (std::abs(grid[i] - hz) < std::abs(grid[best] - hz))
+            best = i;
+    return best;
+}
+
+/**
  * @brief Centre frequencies of one SCAN task's entries (ACQ-06).
  *
- * Entries sit on a fixed grid: centre_k = start + (k + ½)·step for every k
- * with centre_k ≤ stop. The list starts at the grid entry containing
- * @p resume_hz and wraps, so a re-submission after preemption continues the
- * sweep and every grid frequency appears exactly once. The grid never moves
- * — the per-frequency noise-floor and persistence state is keyed by these
- * centres. A span narrower than one step (e.g. a 12.5 kHz P25 voice channel)
- * yields one entry at the span centre; it used to yield none, and the
- * controller rejects an empty scan.
+ * The scanGrid() entries, starting at the one whose window contains
+ * @p resume_hz and wrapping, so a re-submission after preemption continues
+ * the sweep and every grid frequency appears exactly once. The grid never
+ * moves — the per-frequency noise-floor and persistence state is keyed by
+ * these centres.
  */
 inline std::vector<double>
 scanEntryCenters(double start_hz, double stop_hz, double step_hz, double resume_hz)
 {
-    std::vector<double> grid;
-    if (step_hz > 0.0)
-        for (int k = 0; start_hz + (k + 0.5) * step_hz <= stop_hz; ++k)
-            grid.push_back(start_hz + (k + 0.5) * step_hz);
-    if (grid.empty())
-        return {0.5 * (start_hz + stop_hz)};
-    int first = 0;
-    if (resume_hz > start_hz)
-    {
-        first = (int)std::floor((resume_hz - start_hz) / step_hz + 1e-9);
-        if (first >= (int)grid.size())
-            first = 0;
-    }
+    const auto grid  = scanGrid(start_hz, stop_hz, step_hz);
+    size_t     first = 0;
+    if (grid.size() > 1 && resume_hz > start_hz)
+        for (size_t i = 0; i < grid.size(); ++i)
+            if (grid[i] - 0.5 * step_hz <= resume_hz + 1e-3)
+                first = i;  // last window starting at or before resume
     std::vector<double> out;
     out.reserve(grid.size());
     for (size_t i = 0; i < grid.size(); ++i)
@@ -283,21 +308,19 @@ scanEntryCenters(double start_hz, double stop_hz, double step_hz, double resume_
 }
 
 /**
- * @brief Where the next SCAN task resumes after the dwell at @p completed_hz
- *        finished: the start of the following grid entry (wrapping to start).
- *
- * The old rule, `packet centre + step` on every packet, landed half a step
- * off the grid, so each preemption shifted the whole grid (unbounded growth of
- * the per-frequency maps, lost persistence history) and skipped the entry
- * that was cut short.
+ * @brief Where a re-submitted sweep resumes after the dwell centred at
+ * @p completed_hz: the start of the next grid window, or @p start_hz after
+ * the last one. Keeping to the grid matters — a resume point off the grid
+ * moved every later entry (new keys for the per-frequency maps, lost
+ * persistence history) and skipped the entry that was cut short.
  */
 inline double resumeAfterDwell(double start_hz, double stop_hz, double step_hz, double completed_hz)
 {
-    if (step_hz <= 0.0)
+    const auto grid = scanGrid(start_hz, stop_hz, step_hz);
+    if (grid.size() <= 1)
         return start_hz;
-    const int    k    = (int)std::floor((completed_hz - start_hz) / step_hz);
-    const double next = start_hz + (k + 1) * step_hz;
-    return (next + 0.5 * step_hz > stop_hz) ? start_hz : next;
+    const size_t i = nearestGridIndex(grid, completed_hz);
+    return i + 1 < grid.size() ? grid[i + 1] - 0.5 * step_hz : start_hz;
 }
 
 struct SweepConfig

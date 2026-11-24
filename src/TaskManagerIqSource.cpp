@@ -454,7 +454,9 @@ bool TaskManagerIqSource::next(Dwell& d)
             // The task's last entry is in: the sweep is over. Return false on
             // the next call instead of idling STREAM_TIMEOUT_MS (5 s) on a
             // silent socket — that dead time used to follow every sweep.
-            if (std::abs(c - last_entry_hz_) < 0.25 * step_hz + 1.0)
+            // Header CFs are the entry centres to the Hz; the last two entries
+            // can be closer than a step (the last window ends at stop).
+            if (std::abs(c - last_entry_hz_) < 1e3)
                 sweep_done_ = true;
             return true;
         }

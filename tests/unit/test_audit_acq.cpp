@@ -26,6 +26,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <random>
 #include <set>
 #include <thread>
+#include <tuple>
 
 #include <au/units/hertz.hh>
 
@@ -160,6 +161,42 @@ TEST(AuditAcq, Acq06_ResumeKeepsTheEntryGrid)
     // The old per-packet rule, for the record: off the grid.
     const double old_resume = fresh[4] + step;
     EXPECT_FALSE(grid.count(old_resume + step / 2.0));
+}
+
+// ACQ-24: the grid kept only centres <= stop, so the top of the band was
+// never scanned: 88-108 MHz at 2.048 MS/s (step 1.6384 MHz) stopped at
+// 107.66 MHz. The last window now ends at stop and no centre leaves the band.
+TEST(AuditAcq, Acq24_GridCoversTheWholeBand)
+{
+    for (auto [start, stop, step] : {std::tuple{88e6, 108e6, 1.6384e6},
+                                     std::tuple{100e6, 200e6, 8e6},
+                                     std::tuple{70e6, 6e9, 8e6},
+                                     std::tuple{400e6, 456e6, 8e6}})
+    {
+        const auto          g = scanEntryCenters(start, stop, step, start);
+        std::vector<double> s(g.begin(), g.end());
+        std::sort(s.begin(), s.end());
+        EXPECT_NEAR(s.front() - step / 2, start, 1.0);
+        EXPECT_NEAR(s.back() + step / 2, stop, 1.0) << "top of " << start << "-" << stop;
+        for (size_t i = 1; i < s.size(); ++i)
+            EXPECT_LE(s[i] - s[i - 1], step + 1.0) << "gap in the coverage";
+        for (double c : s)
+        {
+            EXPECT_GE(c - step / 2, start - 1.0);
+            EXPECT_LE(c + step / 2, stop + 1.0);
+        }
+        // a resume after any entry continues with the next one, every entry once
+        for (size_t i = 0; i < g.size(); ++i)
+        {
+            const auto next =
+                scanEntryCenters(start, stop, step, resumeAfterDwell(start, stop, step, g[i]));
+            EXPECT_EQ(std::set<double>(next.begin(), next.end()),
+                      std::set<double>(g.begin(), g.end()));
+            EXPECT_DOUBLE_EQ(next.front(), g[(i + 1) % g.size()]);
+        }
+    }
+    std::printf("ACQ-24: 88-108 MHz top covered %.3f MHz (was 107.661)\n",
+                (scanEntryCenters(88e6, 108e6, 1.6384e6, 88e6).back() + 0.8192e6) / 1e6);
 }
 
 // P25 voice channel: a 12.5 kHz span used to produce zero entries, which the
