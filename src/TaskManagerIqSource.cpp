@@ -370,7 +370,17 @@ void TaskManagerIqSource::stop()
 void TaskManagerIqSource::close()
 {
     running_ = false;
+    const std::string finished = task_id_;
     sendTaskStop();
+    // The next sweep goes to the same radio: wait until the controller has
+    // released this task (its terminal status is published after the
+    // hardware is). Acq sees the last dwell complete before the controller's
+    // dwell timer ends, so the re-submission used to arrive while the old
+    // task still held the radio, was rejected, and the scanner backed off
+    // (~1.5 rejections/s with 4 scanners on 4 radios, ACQ-26).
+    if (!finished.empty() && amqp_ch_)
+        for (int i = 0; i < 200 && !amqp_ch_->isTerminal(finished); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
     if (udp_fd_ >= 0)
     {
         ::close(udp_fd_);
