@@ -27,6 +27,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include "GpsCache.hpp"
 #include "P25Db.hpp"
 #include "P25GrantConsumer.hpp"
+#include "Shutdown.hpp"
 #include "SpectrumScanner.hpp"
 #include "SweepConfig.hpp"
 #include "TaskManagerIqSource.hpp"
@@ -50,6 +51,7 @@ static std::atomic<bool> g_running{true};
 static void sigHandler(int)
 {
     g_running = false;
+    acq::shutdownRequested().store(true);  // interrupts start-up waits (ACQ-29)
 }
 
 static void setupLogging()

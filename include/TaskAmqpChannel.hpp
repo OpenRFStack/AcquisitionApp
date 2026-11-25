@@ -11,6 +11,8 @@ Do not use for commercial, organizational, or military purposes.
 Contact author for permission: https://github.com/OpenRFStack
 ========================================================================
 */
+#include "Shutdown.hpp"
+
 #include <nlohmann/json.hpp>
 #include <proton/connection.hpp>
 #include <proton/connection_options.hpp>
@@ -101,12 +103,13 @@ public:
                 container_->run();
             });
         std::unique_lock<std::mutex> lk(mu_);
-        ready_cv_.wait_for(lk,
-                           std::chrono::milliseconds(connect_timeout_ms),
-                           [this]
-                           {
-                               return ready_ || stopped_;
-                           });
+        waitInterruptible(lk,
+                          ready_cv_,
+                          connect_timeout_ms,
+                          [this]
+                          {
+                              return ready_ || stopped_;
+                          });
         if (!ready_)
             spdlog::warn("[TaskAmqpChannel] not ready after {}ms", connect_timeout_ms);
     }
@@ -155,12 +158,13 @@ public:
     {
         {
             std::unique_lock<std::mutex> lk(mu_);
-            if (!ready_cv_.wait_for(lk,
-                                    std::chrono::milliseconds(timeout_ms),
-                                    [this]
-                                    {
-                                        return ready_;
-                                    }))
+            if (!waitInterruptible(lk,
+                                   ready_cv_,
+                                   timeout_ms,
+                                   [this]
+                                   {
+                                       return ready_;
+                                   }))
             {
                 spdlog::warn("[TaskAmqpChannel] not ready for exchange");
                 return {};
@@ -180,12 +184,13 @@ public:
                         sender_.send(msg);
                 });
         std::unique_lock<std::mutex> lk(mu_);
-        result_cv_.wait_for(lk,
-                            std::chrono::milliseconds(timeout_ms),
-                            [this]
-                            {
-                                return pending_result_.received;
-                            });
+        waitInterruptible(lk,
+                          result_cv_,
+                          timeout_ms,
+                          [this]
+                          {
+                              return pending_result_.received;
+                          });
         return pending_result_;
     }
 
@@ -327,6 +332,23 @@ public:
     }
 
 private:
+    // wait_for in 100 ms slices that also ends on a shutdown request.
+    template <typename Pred>
+    static bool waitInterruptible(std::unique_lock<std::mutex>& lk,
+                                  std::condition_variable&      cv,
+                                  int                           timeout_ms,
+                                  Pred                          pred)
+    {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (!pred())
+        {
+            if (shutdownRequested().load() || std::chrono::steady_clock::now() >= end)
+                return pred();
+            cv.wait_for(lk, std::chrono::milliseconds(100));
+        }
+        return true;
+    }
+
     void onStatus(const proton::message& msg)
     {
         try

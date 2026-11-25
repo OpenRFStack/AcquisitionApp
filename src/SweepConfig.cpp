@@ -312,6 +312,10 @@ SweepConfig SweepConfig::from_file(const std::string& path)
 
     if (cfg.sweep.stop_hz <= cfg.sweep.start_hz)
         throw std::runtime_error("sweep stop_hz must be > start_hz");
+    // A zero rate made the sweep step 0 (the whole band collapsed into one
+    // entry). (rx_channels is clamped to >= 1 above.)
+    if (!(cfg.device.sample_rate.in(au::hertz) > 0.0))
+        throw std::runtime_error("device sample_rate_sps must be > 0");
     if (cfg.sweep.fft_size < 64 || (cfg.sweep.fft_size & (cfg.sweep.fft_size - 1)) != 0)
         throw std::runtime_error("fft_size must be a power of 2 >= 64");
     if (cfg.sweep.dwell_samples < 0)

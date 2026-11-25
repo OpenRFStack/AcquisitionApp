@@ -285,7 +285,7 @@ int TaskManagerIqSource::queryDeviceCount()
     constexpr int kMaxWaitMs = 300'000;
     AmqpResponse  resp;
     int           waited = 0;
-    while (waited < kMaxWaitMs)
+    while (waited < kMaxWaitMs && !shutdownRequested().load())
     {
         resp = amqp_ch_->exchange(req.dump(), req_id, kStepMs);
         if (resp.received)
@@ -369,7 +369,7 @@ void TaskManagerIqSource::stop()
 
 void TaskManagerIqSource::close()
 {
-    running_ = false;
+    running_                   = false;
     const std::string finished = task_id_;
     sendTaskStop();
     // The next sweep goes to the same radio: wait until the controller has

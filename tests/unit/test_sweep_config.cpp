@@ -448,6 +448,16 @@ TEST_F(SweepConfigTest, P25SourceUsesTheVoiceCaptureRank)
         << "default voice-capture rank must outrank the default sweep";
 }
 
+TEST_F(SweepConfigTest, ZeroSampleRateIsRejected)
+{
+    EXPECT_THROW(parse(R"(
+        <sdr_acquisition>
+          <device><sample_rate_sps>0</sample_rate_sps></device>
+          <sweep><start_hz>100000000</start_hz><stop_hz>200000000</stop_hz></sweep>
+        </sdr_acquisition>)"),
+                 std::runtime_error);
+}
+
 /*
 ========================================================================
 End of file — OpenRFStack
