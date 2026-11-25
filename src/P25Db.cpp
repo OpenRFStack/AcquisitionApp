@@ -14,32 +14,58 @@ Contact author for permission: https://github.com/OpenRFStack
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
+#include <memory>
+
 #include <pqxx/pqxx>
 
 namespace acq
 {
 
+// Connects on first use and after a lost connection (at most every 5 s).
+// It used to connect in the constructor: with the database down at start-up
+// main caught the exception and P25 channels were never recorded that run;
+// after a failed reconnect it kept using the broken connection.
 struct P25Db::Impl
 {
-    std::string      conn_str;
-    pqxx::connection conn;
+    std::string                           conn_str;
+    std::unique_ptr<pqxx::connection>     conn;
+    std::chrono::steady_clock::time_point next_try{};
+    bool                                  warned = false;
 
     explicit Impl(const std::string& cs)
         : conn_str(cs)
-        , conn(cs)
     {
     }
 
-    void reconnect()
+    pqxx::connection* get()
     {
+        if (conn)
+            return conn.get();
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_try)
+            return nullptr;
         try
         {
-            conn = pqxx::connection(conn_str);
+            conn = std::make_unique<pqxx::connection>(conn_str);
+            if (warned)
+                spdlog::info("[P25Db] connected");
+            warned = false;
+            return conn.get();
         }
         catch (const std::exception& e)
         {
-            spdlog::error("[P25Db] reconnect failed: {}", e.what());
+            if (!warned)
+                spdlog::warn("[P25Db] database unavailable: {} — retrying", e.what());
+            warned   = true;
+            next_try = now + std::chrono::seconds(5);
+            return nullptr;
         }
+    }
+
+    void lost()
+    {
+        conn.reset();
     }
 };
 
@@ -60,7 +86,10 @@ void P25Db::upsert_control(double freq_hz,
 {
     try
     {
-        pqxx::work tx(impl_->conn);
+        auto* c = impl_->get();
+        if (!c)
+            return;
+        pqxx::work tx(*c);
         tx.exec_params(R"sql(
             INSERT INTO p25_channels
                 (freq_hz, wacn, sys_id, rfss_id, site_id,
@@ -87,7 +116,7 @@ void P25Db::upsert_control(double freq_hz,
     catch (const pqxx::broken_connection& e)
     {
         spdlog::error("[P25Db] connection lost: {} — reconnecting", e.what());
-        impl_->reconnect();
+        impl_->lost();
     }
     catch (const std::exception& e)
     {
@@ -105,7 +134,10 @@ void P25Db::upsert_grant(const P25Grant& g,
 {
     try
     {
-        pqxx::work tx(impl_->conn);
+        auto* c = impl_->get();
+        if (!c)
+            return;
+        pqxx::work tx(*c);
         // alg_id / alg_name / key_id may be 0/unknown if HDU not yet decoded
         std::optional<int>         alg_id_opt;
         std::optional<std::string> alg_name_opt;
@@ -156,7 +188,7 @@ void P25Db::upsert_grant(const P25Grant& g,
     catch (const pqxx::broken_connection& e)
     {
         spdlog::error("[P25Db] connection lost: {} — reconnecting", e.what());
-        impl_->reconnect();
+        impl_->lost();
     }
     catch (const std::exception& e)
     {

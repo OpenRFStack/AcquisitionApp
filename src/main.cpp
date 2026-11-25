@@ -143,15 +143,10 @@ int main(int argc, char* argv[])
     // ── PostgreSQL detection writer ───────────────────────────────────────
     std::unique_ptr<acq::DetectionDb> db;
     bool                              db_ok = false;
-    try
-    {
-        db    = std::make_unique<acq::DetectionDb>(cfg.db.connection_string());
-        db_ok = true;
-    }
-    catch (const std::exception& e)
-    {
-        spdlog::warn("PostgreSQL connection failed: {} — continuing without DB", e.what());
-    }
+    // Connects (and reconnects) on its own thread: a database that comes up
+    // after Acq used to stay unused for the whole run.
+    db    = std::make_unique<acq::DetectionDb>(cfg.db.connection_string());
+    db_ok = true;
 
     if (!amqp_ok && !db_ok)
     {
@@ -320,15 +315,8 @@ int main(int argc, char* argv[])
         std::shared_ptr<acq::P25Db> p25db;
         if (db_ok)
         {
-            try
-            {
-                p25db = std::make_shared<acq::P25Db>(cfg.db.connection_string());
-                spdlog::info("[P25] p25_channels table connected");
-            }
-            catch (const std::exception& e)
-            {
-                spdlog::warn("[P25] DB unavailable: {}", e.what());
-            }
+            // Connects on first use and reconnects on its own.
+            p25db = std::make_shared<acq::P25Db>(cfg.db.connection_string());
         }
 
         // Build a one-shot IQ source for voice channel captures

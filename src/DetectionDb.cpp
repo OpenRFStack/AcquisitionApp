@@ -14,6 +14,7 @@ Contact author for permission: https://github.com/OpenRFStack
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <chrono>
 
 #include <au/units/hertz.hh>
@@ -27,11 +28,22 @@ DetectionDb::DetectionDb(const std::string&         conn_str,
                          int                        batch_size,
                          au::QuantityD<au::Seconds> flush_interval)
     : conn_str_(conn_str)
-    , conn_(conn_str)
     , batch_size_(batch_size)
     , flush_interval_(flush_interval)
 {
-    pqxx::work txn(conn_);
+    // No connection here: the writer thread connects (and reconnects) on its
+    // own. A database that was not up when Acq started used to disable
+    // storage for the whole run (main caught the constructor's exception).
+    thread_ = std::thread(
+        [this]
+        {
+            workerLoop();
+        });
+}
+
+void DetectionDb::ensureSchema()
+{
+    pqxx::work txn(*conn_);
     // Ensure the shared signals table exists (schema/init.sql should be run first,
     // but this guard prevents a hard crash if it hasn't been).
     txn.exec(R"(
@@ -78,12 +90,46 @@ DetectionDb::DetectionDb(const std::string&         conn_str,
         ALTER TABLE signals ADD COLUMN IF NOT EXISTS noise_floor_db REAL;
     )");
     txn.commit();
+}
 
-    thread_ = std::thread(
-        [this]
-        {
-            workerLoop();
-        });
+bool DetectionDb::connected() const
+{
+    return connected_.load();
+}
+
+uint64_t DetectionDb::dropped() const
+{
+    return dropped_.load();
+}
+
+bool DetectionDb::tryConnect()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_connect_)
+        return false;
+    try
+    {
+        conn_ = std::make_unique<pqxx::connection>(conn_str_);
+        ensureSchema();
+        connected_ = true;
+        retry_s_   = 1;
+        spdlog::info("[DetectionDb] connected");
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        conn_.reset();
+        connected_ = false;
+        if (!warned_)
+            spdlog::warn("[DetectionDb] database unavailable ({}) — detections are queued "
+                         "(newest {} kept) and written once it is back",
+                         e.what(),
+                         kMaxQueued);
+        warned_       = true;
+        next_connect_ = now + std::chrono::seconds(retry_s_);
+        retry_s_      = std::min(retry_s_ * 2, 5);  // a refused connect is cheap
+        return false;
+    }
 }
 
 DetectionDb::~DetectionDb()
@@ -98,7 +144,13 @@ void DetectionDb::push(const Detection& d)
 {
     {
         std::lock_guard lock(mutex_);
-        queue_.push(d);
+        if (queue_.size() >= kMaxQueued)  // outage: keep the newest
+        {
+            queue_.pop_front();
+            ++dropped_;
+        }
+        queue_.push_back(d);
+        queue_.back().iq_snapshot.reset();  // not stored; 8 KB per detection
     }
     cv_.notify_one();
 }
@@ -120,11 +172,32 @@ void DetectionDb::workerLoop()
                              return (int)queue_.size() >= batch_size_ || stopped_;
                          });
 
-            while (!queue_.empty() && (int)batch.size() < batch_size_)
-            {
-                batch.push_back(queue_.front());
-                queue_.pop();
+            if (conn_)  // disconnected: leave everything queued
+                while (!queue_.empty() && (int)batch.size() < batch_size_)
+                {
+                    batch.push_back(queue_.front());
+                    queue_.pop_front();
+                }
+        }
+        if (!conn_)
+        {
+            if (!tryConnect())
+            {  // sleep until the next attempt (a full queue would spin here)
+                std::unique_lock lock(mutex_);
+                cv_.wait_until(lock,
+                               next_connect_,
+                               [this]
+                               {
+                                   return stopped_.load();
+                               });
             }
+            continue;
+        }
+        if (warned_)
+        {
+            spdlog::info("[DetectionDb] database back; {} detection(s) dropped while it was down",
+                         dropped_.load());
+            warned_ = false;
         }
 
         if (!batch.empty())
@@ -132,24 +205,31 @@ void DetectionDb::workerLoop()
             try
             {
                 flush(batch);
+                batch.clear();
             }
             catch (const pqxx::broken_connection& e)
             {
-                spdlog::error("[DetectionDb] connection lost: {} — reconnecting", e.what());
-                try
+                // Put the batch back (it used to be discarded) and reconnect.
+                spdlog::warn("[DetectionDb] connection lost: {} — reconnecting", e.what());
                 {
-                    conn_ = pqxx::connection(conn_str_);
+                    std::lock_guard lock(mutex_);
+                    for (auto it = batch.rbegin(); it != batch.rend(); ++it)
+                        queue_.push_front(*it);
+                    while (queue_.size() > kMaxQueued)
+                    {
+                        queue_.pop_front();
+                        ++dropped_;
+                    }
                 }
-                catch (const std::exception& re)
-                {
-                    spdlog::error("[DetectionDb] reconnect failed: {}", re.what());
-                }
+                batch.clear();
+                conn_.reset();
+                connected_ = false;
             }
             catch (const std::exception& e)
             {
                 spdlog::error("[DetectionDb] flush failed: {}", e.what());
+                batch.clear();  // a bad row must not block the queue
             }
-            batch.clear();
         }
     }
 
@@ -159,10 +239,10 @@ void DetectionDb::workerLoop()
         while (!queue_.empty())
         {
             batch.push_back(queue_.front());
-            queue_.pop();
+            queue_.pop_front();
         }
     }
-    if (!batch.empty())
+    if (!batch.empty() && conn_)
     {
         try
         {
@@ -177,7 +257,7 @@ void DetectionDb::workerLoop()
 
 void DetectionDb::flush(std::vector<Detection>& batch)
 {
-    pqxx::work txn(conn_);
+    pqxx::work txn(*conn_);
 
     for (const auto& d : batch)
     {
@@ -194,8 +274,14 @@ void DetectionDb::flush(std::vector<Detection>& batch)
         // bandwidth (±50%).  Matches classified OR unclassified rows — if the
         // signal is already classified we still want to update last_seen/power.
         auto existing = txn.exec_params(
+            // A range on freq_hz (idx_signals_freq): abs(freq_hz - $1) < 10000
+            // could not use the index, so every detection scanned the table —
+            // 1206 detections/s with 1000 rows, 91/s with 100 000 (ACQ-27).
             "SELECT id FROM signals "
-            "WHERE abs(freq_hz - $1) < 10000 "
+            // (explicit cast: "$1 - 10000" alone made $1 an integer and any
+            // frequency above 2.147 GHz failed the batch)
+            "WHERE freq_hz > $1::double precision - 10000 "
+            "  AND freq_hz < $1::double precision + 10000 "
             "  AND ($2::double precision IS NULL OR bandwidth_hz IS NULL "
             "       OR abs(bandwidth_hz - $2) / GREATEST(bandwidth_hz, 1000.0) < 0.5) "
             "  AND last_seen > now() - interval '10 minutes' "

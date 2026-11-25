@@ -26,6 +26,9 @@ Contact author for permission: https://github.com/OpenRFStack
 #include "Types.hpp"
 
 #include <atomic>
+#include <chrono>
+#include <memory>
+#include <deque>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -73,10 +76,15 @@ public:
      */
     void push(const Detection& d);
 
+    /// True while the writer holds a working connection.
+    bool connected() const;
+    /// Detections dropped because the queue was full during an outage.
+    uint64_t dropped() const;
+
 private:
     std::string                conn_str_;
-    pqxx::connection           conn_;
-    std::queue<Detection>      queue_;
+    std::unique_ptr<pqxx::connection> conn_;  ///< writer thread only; null = disconnected
+    std::deque<Detection>      queue_;
     std::mutex                 mutex_;
     std::condition_variable    cv_;
     std::atomic<bool>          stopped_{false};
@@ -85,6 +93,15 @@ private:
     au::QuantityD<au::Seconds> flush_interval_;
 
     void workerLoop();
+    bool tryConnect();     ///< writer thread; honours the reconnect backoff
+    void ensureSchema();
+
+    static constexpr size_t               kMaxQueued = 20'000;
+    std::atomic<bool>                     connected_{false};
+    std::atomic<uint64_t>                 dropped_{0};
+    bool                                  warned_ = false;  // writer thread
+    int                                   retry_s_ = 1;     // writer thread
+    std::chrono::steady_clock::time_point next_connect_{};  // writer thread
     void flush(std::vector<Detection>& batch);
 };
 
