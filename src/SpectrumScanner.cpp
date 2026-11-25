@@ -78,6 +78,8 @@ void SpectrumScanner::stop()
 
 void SpectrumScanner::sweepLoop()
 {
+    static constexpr int kMinRetryMs = 500, kMaxRetryMs = 5000;
+    int                  retry_ms = kMinRetryMs;
     while (running_)
     {
         try
@@ -96,11 +98,17 @@ void SpectrumScanner::sweepLoop()
             // never-fully-opened source (sendTaskStop() no-ops without a
             // task_id_, and the fd guard handles udp_fd_ == -1).
             source_->close();
-            spdlog::error("[Scanner] source open failed: {} — retrying in 5s", e.what());
-            for (int i = 0; i < 50 && running_; ++i)
+            // Back off 0.5 s doubling to 5 s: a fixed 5 s left the scanner
+            // idle long after the radio was free again (a rejection costs the
+            // controller a few ms). Reset after the next successful open.
+            spdlog::error(
+                "[Scanner] source open failed: {} — retrying in {} ms", e.what(), retry_ms);
+            for (int waited = 0; waited < retry_ms && running_; waited += 100)
                 std::this_thread::sleep_for(milliseconds(100));
+            retry_ms = std::min(2 * retry_ms, kMaxRetryMs);
             continue;
         }
+        retry_ms = kMinRetryMs;
 
         spdlog::info("[Scanner] source open: {} channel(s)  {:.3f}–{:.3f} MHz",
                      cfg_.device.rx_channels,
