@@ -36,6 +36,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -334,14 +335,22 @@ int main(int argc, char* argv[])
             cfg.p25.grant_topic,
             [&on_detection, &cfg, p25_src = p25_src.get(), p25db](const acq::P25Grant& g)
             {
+                // Record voice channel grant in p25_channels
+                if (p25db)
+                    p25db->upsert_grant(g);
+
+                // <tg_whitelist> (empty = all) was parsed and never applied:
+                // every grant pulled a radio off the sweep (ACQ-33).
+                const auto& wl = cfg.p25.tg_whitelist;
+                if (!wl.empty() && std::find(wl.begin(), wl.end(), g.talk_group) == wl.end())
+                {
+                    spdlog::debug("[P25] TG={} not in tg_whitelist — not captured", g.talk_group);
+                    return;
+                }
                 spdlog::info("[P25] tuning to TG={} @ {:.4f}MHz for {:.1f}s",
                              g.talk_group,
                              g.freq_hz / 1e6,
                              cfg.p25.capture_s);
-
-                // Record voice channel grant in p25_channels
-                if (p25db)
-                    p25db->upsert_grant(g);
 
                 // Build a temporary sweep config for the voice channel
                 // (narrow: ±6.25 kHz around centre, 12.5 kHz BW, single step)
