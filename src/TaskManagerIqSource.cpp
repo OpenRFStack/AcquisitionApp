@@ -190,8 +190,13 @@ std::string TaskManagerIqSource::buildScanRequest(const std::string& req_id) con
     std::string dest_ip = (cfg_.receiver.local_ip == "0.0.0.0") ? localAddressTowards(cfg_.amqp.url)
                                                                 : cfg_.receiver.local_ip;
     json        streaming_obj = {{"dest_ip", dest_ip}};
+    // Every channel to the one pre-bound socket (the header's channel_index
+    // tells them apart — DwellAssembler expects that). Listing the port once
+    // left channels 1.. on controller-assigned ports nobody listened on: with
+    // rx_channels 2 not one detection on channel 1 (ACQ-31).
     if (prebound_port_ > 0)
-        streaming_obj["dest_ports"] = json::array({static_cast<int>(prebound_port_)});
+        streaming_obj["dest_ports"] = std::vector<int>(
+            (size_t)std::max(1, cfg_.device.rx_channels), static_cast<int>(prebound_port_));
 
     json req = {{"msg_type", "TASK_REQUEST_SCAN"},
                 {"schema_version", "2.0"},
