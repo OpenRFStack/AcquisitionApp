@@ -102,6 +102,12 @@ struct SweepParams
     /// Bins within this range of DC are blanked to suppress AD9361 LO leakage.
     /// Set 0 to disable.
     au::QuantityD<au::Hertz> dc_guard_hz{au::hertz(50'000.0)};
+    /// Every other sweep uses the grid shifted by a quarter step, so the
+    /// frequencies masked by dc_guard_hz at one grid's dwell centres lie
+    /// well inside the other grid's windows. With one grid they were never
+    /// observed: real FM carriers 16-20 dB over the floor at 93.70 and
+    /// 105.17 MHz never detected (ACQ-32).
+    bool alternate_grid{true};
     int                      cfar_guard_bins{8};  ///< CA-CFAR guard cells each side of test bin.
     int cfar_ref_bins{32};  ///< CA-CFAR reference cells each side for noise average.
     /// Minimum peak-to-mean power ratio (dB) for multi-bin runs.

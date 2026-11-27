@@ -39,6 +39,7 @@ Contact author for permission: https://github.com/OpenRFStack
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -167,7 +168,16 @@ std::string TaskManagerIqSource::buildScanRequest(const std::string& req_id) con
     // and wrapping, so a re-submission after preemption continues the sweep
     // and every frequency is covered exactly once per task (ACQ-06). A span
     // narrower than one step (P25 voice channel) gets one centred entry.
-    const auto centers = scanEntryCenters(start_hz, stop_hz, step_hz, resume);
+    auto centers = scanEntryCenters(start_hz, stop_hz, step_hz, resume);
+    // Odd sweeps: the grid shifted by a quarter step (clamped inside the
+    // band), so the DC-guarded centres of one grid sit at +-0.2 x rate in
+    // the other's windows (ACQ-32). Single-entry spans (P25 voice) stay.
+    if (cfg_.sweep.alternate_grid && centers.size() > 1 && (sweeps_built_++ % 2) == 1)
+    {
+        for (double& c : centers)
+            c = std::min(c + 0.25 * step_hz, stop_hz - 0.5 * step_hz);
+        centers.erase(std::unique(centers.begin(), centers.end()), centers.end());
+    }
     json       entries = json::array();
     int        step_i  = 0;
     for (double c : centers)

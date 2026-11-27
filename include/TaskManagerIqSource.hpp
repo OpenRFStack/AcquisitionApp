@@ -166,6 +166,7 @@ private:
 
     /// Centre of the current task's last scan entry (set by buildScanRequest).
     mutable double last_entry_hz_{0.0};
+    mutable int    sweeps_built_{0};  ///< SCAN requests built (grid alternation, ACQ-32)
     /// The last entry's dwell has been delivered — next() returns false at once.
     bool sweep_done_{false};
 

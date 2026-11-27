@@ -277,6 +277,11 @@ SweepConfig SweepConfig::from_file(const std::string& path)
     }
     if (auto* el = opt(sweep, "settle_samples"))
         el->QueryIntText(&cfg.sweep.settle_samples);
+    if (auto* el = opt(sweep, "alternate_grid"))
+    {
+        const char* t           = el->GetText();
+        cfg.sweep.alternate_grid = !(t && (std::string(t) == "false" || std::string(t) == "0"));
+    }
     if (auto* el = opt(sweep, "dc_guard_hz"))
     {
         uint64_t raw = 0;
